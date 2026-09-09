@@ -201,6 +201,15 @@
       if (!url || !key) return;
       client = window.supabase.createClient(url, key);
       $("status").textContent = "Configured";
+      updateAuthStatus();
+    }
+
+    async function updateAuthStatus() {
+      if (!client) return;
+      const { data } = await client.auth.getUser();
+      if (data?.user) {
+        $("status").textContent = `Signed in: ${data.user.email || data.user.id} | User ID: ${data.user.id}`;
+      }
     }
 
     function saveSettings() {
@@ -264,6 +273,7 @@
       if (!client) return alert("Configure Supabase first.");
       const orgId = $("orgId").value.trim();
       if (!orgId) return alert("Enter an Org ID.");
+      await updateAuthStatus();
 
       $("status").textContent = "Loading...";
       const { data: usage, error: usageError } = await client
