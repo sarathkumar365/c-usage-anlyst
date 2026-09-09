@@ -209,7 +209,10 @@
       const { data } = await client.auth.getUser();
       if (data?.user) {
         $("status").textContent = `Signed in: ${data.user.email || data.user.id} | User ID: ${data.user.id}`;
+        return data.user;
       }
+      $("status").textContent = "Configured, not signed in to Supabase";
+      return null;
     }
 
     function saveSettings() {
@@ -224,7 +227,10 @@
       if (!client) return alert("Configure Supabase first.");
       const email = $("email").value.trim();
       if (!email) return alert("Enter an email address.");
-      const { error } = await client.auth.signInWithOtp({ email });
+      const { error } = await client.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo: window.location.href }
+      });
       if (error) return alert(error.message);
       $("status").textContent = "Login link sent";
     }
@@ -273,7 +279,15 @@
       if (!client) return alert("Configure Supabase first.");
       const orgId = $("orgId").value.trim();
       if (!orgId) return alert("Enter an Org ID.");
-      await updateAuthStatus();
+      const user = await updateAuthStatus();
+      if (!user) {
+        renderMetrics([], []);
+        table("users", ["User", "Machine", "Tokens", "Share", "Requests"], []);
+        table("projects", ["Project", "Tokens", "Share", "Requests"], []);
+        table("models", ["Model", "Tokens", "Share", "Requests"], []);
+        table("anomalies", ["Severity", "Message", "Last seen"], []);
+        return alert("Sign in to Supabase first. Use your real email, click Send login link, then open the email link.");
+      }
 
       $("status").textContent = "Loading...";
       const { data: usage, error: usageError } = await client
