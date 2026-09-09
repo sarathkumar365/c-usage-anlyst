@@ -177,6 +177,11 @@ Deno.serve(async (req) => {
     if (error) return new Response(error.message, { status: 500, headers: corsHeaders });
   }
 
+  await supabase
+    .from("collector_tokens")
+    .update({ last_used_at: now })
+    .eq("token_hash", tokenHash);
+
   return Response.json({
     ok: true,
     duplicate: false,

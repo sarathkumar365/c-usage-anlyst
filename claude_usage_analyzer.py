@@ -61,8 +61,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
 DEFAULT_SYNC_INTERVAL_MINUTES = 30
+DEFAULT_ENROLL_URL = "https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/enroll"
 
 CLAUDE_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")).expanduser()
 PROJECTS_DIR = CLAUDE_DIR / "projects"
@@ -479,6 +480,93 @@ def register_collector(args: argparse.Namespace):
     print(f"Config : {config_path()}")
     print(f"ID     : {collector_id}")
     print(f"Label  : {config['collector_label']}")
+
+
+def post_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None = None, timeout: int = 30) -> dict[str, Any]:
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": f"claude-usage-agent/{APP_VERSION}",
+            **(headers or {}),
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            text = response.read().decode("utf-8", errors="ignore")
+            try:
+                parsed = json.loads(text) if text else {}
+            except json.JSONDecodeError:
+                parsed = {"raw": text}
+            return {"status": response.status, "response": parsed}
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"Request failed with HTTP {exc.code}: {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Request failed: {exc.reason}") from exc
+
+
+def enroll_collector(args: argparse.Namespace):
+    existing = load_agent_config()
+    claude_config_dir = (
+        args.claude_dir
+        or existing.get("claude_config_dir")
+        or os.environ.get("CLAUDE_CONFIG_DIR")
+        or str(Path.home() / ".claude")
+    )
+    collector_id = existing.get("collector_id") or stable_hash({
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "host": socket.gethostname(),
+        "user": getpass.getuser(),
+        "random": uuid.uuid4().hex,
+    })[:32]
+    identity_config = {
+        **existing,
+        "collector_id": collector_id,
+        "org_id": args.org_id or existing.get("org_id") or "",
+        "account_label": args.account_label or existing.get("account_label") or "",
+        "collector_label": args.collector_label or existing.get("collector_label") or socket.gethostname(),
+    }
+    identity = collect_identity(identity_config)
+    result = post_json(args.enroll_url, {
+        "schema_version": 1,
+        "collector_version": APP_VERSION,
+        "org_id": args.org_id or existing.get("org_id") or "",
+        "identity": identity,
+    })
+    response = result.get("response") or {}
+    collector_token = response.get("collector_token")
+    ingest_url = response.get("ingest_url")
+    org_id = response.get("org_id") or args.org_id or existing.get("org_id") or ""
+    if not collector_token or not ingest_url:
+        raise RuntimeError(f"Enrollment response missing token or ingest URL: {response}")
+
+    config = {
+        **existing,
+        "schema_version": 1,
+        "collector_id": collector_id,
+        "enroll_url": args.enroll_url,
+        "ingest_url": ingest_url,
+        "collector_token": collector_token,
+        "org_id": org_id,
+        "account_label": identity["account_label"],
+        "collector_label": identity["collector_label"],
+        "claude_config_dir": claude_config_dir,
+        "sync_interval_minutes": int(response.get("sync_interval_minutes") or args.sync_interval_minutes or DEFAULT_SYNC_INTERVAL_MINUTES),
+        "registered_at": existing.get("registered_at") or datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "enrolled_at": datetime.now(timezone.utc).isoformat(),
+    }
+    write_json_file(config_path(), config)
+    log_dir().mkdir(parents=True, exist_ok=True)
+    print(c("Collector enrolled.", "green"))
+    print(f"Config : {config_path()}")
+    print(f"ID     : {collector_id}")
+    print(f"Label  : {config['collector_label']}")
+    print(f"Sync   : every {config['sync_interval_minutes']} minutes")
 
 
 def print_status():
@@ -1625,31 +1713,15 @@ def upload_payload(payload: dict[str, Any], config: dict[str, Any], timeout: int
     if not ingest_url or not token:
         raise RuntimeError("Collector is not registered. Run --register with --ingest-url and --collector-token first.")
 
-    body = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
+    return post_json(
         ingest_url,
-        data=body,
-        method="POST",
         headers={
-            "Content-Type": "application/json",
             "Authorization": f"Bearer {token}",
             "Idempotency-Key": str(payload["idempotency_key"]),
-            "User-Agent": f"claude-usage-agent/{APP_VERSION}",
         },
+        payload=payload,
+        timeout=timeout,
     )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            text = response.read().decode("utf-8", errors="ignore")
-            try:
-                parsed = json.loads(text) if text else {}
-            except json.JSONDecodeError:
-                parsed = {"raw": text}
-            return {"status": response.status, "response": parsed}
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"Upload failed with HTTP {exc.code}: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"Upload failed: {exc.reason}") from exc
 
 
 def sync_usage(
@@ -1752,6 +1824,8 @@ def main():
                         help="Print the detailed table-heavy analyzer report.")
     parser.add_argument("--register", action="store_true",
                         help="Save collector configuration for background/team sync.")
+    parser.add_argument("--enroll", action="store_true",
+                        help="Enroll this machine with the team backend and save collector configuration.")
     parser.add_argument("--status", action="store_true",
                         help="Show collector install, identity, sync, and Claude data status.")
     parser.add_argument("--sync", action="store_true",
@@ -1762,6 +1836,8 @@ def main():
                         help="HTTPS ingest endpoint, usually a Supabase Edge Function URL.")
     parser.add_argument("--collector-token",
                         help="Collector registration/upload token. Stored locally by --register.")
+    parser.add_argument("--enroll-url", default=DEFAULT_ENROLL_URL,
+                        help=f"HTTPS enrollment endpoint. Default: {DEFAULT_ENROLL_URL}.")
     parser.add_argument("--org-id", help="Optional organization/team identifier for uploaded payloads.")
     parser.add_argument("--account-label",
                         help="Optional human label for the Claude account/team being used.")
@@ -1789,6 +1865,13 @@ def main():
             print(c("--ingest-url must be an HTTPS URL.", "red"))
             sys.exit(2)
         register_collector(args)
+        return
+
+    if args.enroll:
+        if not args.enroll_url.startswith("https://"):
+            print(c("--enroll-url must be an HTTPS URL.", "red"))
+            sys.exit(2)
+        enroll_collector(args)
         return
 
     if args.status:

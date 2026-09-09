@@ -18,6 +18,12 @@ create table if not exists collector_tokens (
   token_hash text primary key,
   org_id text not null references organizations(id) on delete cascade,
   label text,
+  collector_id text,
+  machine_id text,
+  user_id text,
+  enrolled_at timestamptz not null default now(),
+  last_used_at timestamptz,
+  enrollment_ip_hash text,
   revoked_at timestamptz,
   created_at timestamptz not null default now()
 );

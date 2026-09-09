@@ -55,24 +55,16 @@ values ('team-main', '00000000-0000-0000-0000-000000000000', 'admin');
 macOS/Linux:
 
 ```bash
-export INGEST_URL="https://YOUR_PROJECT.supabase.co/functions/v1/ingest"
-export COLLECTOR_TOKEN="replace-with-a-long-random-token"
-export ORG_ID="team-main"
-export ACCOUNT_LABEL="shared-claude-account"
-curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/YOUR_REPO/main/install/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/main/install/install.sh | sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-$env:INGEST_URL="https://YOUR_PROJECT.supabase.co/functions/v1/ingest"
-$env:COLLECTOR_TOKEN="replace-with-a-long-random-token"
-$env:ORG_ID="team-main"
-$env:ACCOUNT_LABEL="shared-claude-account"
-irm https://raw.githubusercontent.com/YOUR_ORG/YOUR_REPO/main/install/install.ps1 | iex
+irm https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/main/install/install.ps1 | iex
 ```
 
-The installer stores user-level config, schedules a sync every 30 minutes, and runs one immediate sync.
+The installer enrolls the machine, stores user-level config, schedules a sync every 30 minutes, and runs one immediate sync. If you need the old explicit-token install path, set `COLLECTOR_TOKEN` before running the installer.
 
 ## Manual Collector Commands
 

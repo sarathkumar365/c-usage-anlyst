@@ -1,23 +1,16 @@
 param(
-  [string]$IngestUrl = $env:INGEST_URL,
+  [string]$IngestUrl = $(if ($env:INGEST_URL) { $env:INGEST_URL } else { "https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/ingest" }),
   [string]$CollectorToken = $env:COLLECTOR_TOKEN,
-  [string]$OrgId = $env:ORG_ID,
-  [string]$AccountLabel = $env:ACCOUNT_LABEL,
+  [string]$EnrollUrl = $(if ($env:ENROLL_URL) { $env:ENROLL_URL } else { "https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/enroll" }),
+  [string]$OrgId = $(if ($env:ORG_ID) { $env:ORG_ID } else { "team-main" }),
+  [string]$AccountLabel = $(if ($env:ACCOUNT_LABEL) { $env:ACCOUNT_LABEL } else { $env:USERNAME }),
   [string]$CollectorLabel = $env:COLLECTOR_LABEL,
   [string]$ClaudeDir = $(if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $HOME ".claude" }),
   [int]$SyncIntervalMinutes = $(if ($env:SYNC_INTERVAL_MINUTES) { [int]$env:SYNC_INTERVAL_MINUTES } else { 30 }),
-  [string]$CollectorUrl = $(if ($env:COLLECTOR_URL) { $env:COLLECTOR_URL } else { "https://raw.githubusercontent.com/YOUR_ORG/YOUR_REPO/main/claude_usage_analyzer.py" })
+  [string]$CollectorUrl = $(if ($env:COLLECTOR_URL) { $env:COLLECTOR_URL } else { "https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/main/claude_usage_analyzer.py" })
 )
 
 $ErrorActionPreference = "Stop"
-
-if (-not $IngestUrl) {
-  throw "INGEST_URL or -IngestUrl is required."
-}
-
-if (-not $CollectorToken) {
-  throw "COLLECTOR_TOKEN or -CollectorToken is required."
-}
 
 $AppDir = Join-Path $env:LOCALAPPDATA "ClaudeUsageAgent"
 $ScriptPath = Join-Path $AppDir "claude_usage_analyzer.py"
@@ -30,14 +23,24 @@ if (-not $CollectorLabel) {
   $CollectorLabel = $env:COMPUTERNAME
 }
 
-python $ScriptPath --register `
-  --ingest-url $IngestUrl `
-  --collector-token $CollectorToken `
-  --org-id $OrgId `
-  --account-label $AccountLabel `
-  --collector-label $CollectorLabel `
-  --claude-dir $ClaudeDir `
-  --sync-interval-minutes $SyncIntervalMinutes
+if ($CollectorToken) {
+  python $ScriptPath --register `
+    --ingest-url $IngestUrl `
+    --collector-token $CollectorToken `
+    --org-id $OrgId `
+    --account-label $AccountLabel `
+    --collector-label $CollectorLabel `
+    --claude-dir $ClaudeDir `
+    --sync-interval-minutes $SyncIntervalMinutes
+} else {
+  python $ScriptPath --enroll `
+    --enroll-url $EnrollUrl `
+    --org-id $OrgId `
+    --account-label $AccountLabel `
+    --collector-label $CollectorLabel `
+    --claude-dir $ClaudeDir `
+    --sync-interval-minutes $SyncIntervalMinutes
+}
 
 $Action = New-ScheduledTaskAction -Execute "python" -Argument "`"$ScriptPath`" --sync --days 90"
 $Trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) -RepetitionInterval (New-TimeSpan -Minutes $SyncIntervalMinutes)

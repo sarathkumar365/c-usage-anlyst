@@ -5,17 +5,11 @@ APP_DIR="${CLAUDE_USAGE_AGENT_DIR:-$HOME/.claude-usage-agent}"
 SCRIPT_PATH="$APP_DIR/claude_usage_analyzer.py"
 LOG_DIR="$APP_DIR/logs"
 SYNC_INTERVAL_MINUTES="${SYNC_INTERVAL_MINUTES:-30}"
-COLLECTOR_URL="${COLLECTOR_URL:-https://raw.githubusercontent.com/YOUR_ORG/YOUR_REPO/main/claude_usage_analyzer.py}"
-
-if [ -z "${INGEST_URL:-}" ]; then
-  echo "INGEST_URL is required." >&2
-  exit 2
-fi
-
-if [ -z "${COLLECTOR_TOKEN:-}" ]; then
-  echo "COLLECTOR_TOKEN is required." >&2
-  exit 2
-fi
+COLLECTOR_URL="${COLLECTOR_URL:-https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/main/claude_usage_analyzer.py}"
+INGEST_URL="${INGEST_URL:-https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/ingest}"
+ENROLL_URL="${ENROLL_URL:-https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/enroll}"
+ORG_ID="${ORG_ID:-team-main}"
+ACCOUNT_LABEL="${ACCOUNT_LABEL:-$(id -un 2>/dev/null || whoami 2>/dev/null || hostname)}"
 
 mkdir -p "$APP_DIR" "$LOG_DIR"
 
@@ -31,14 +25,24 @@ fi
 chmod 700 "$APP_DIR"
 chmod 600 "$SCRIPT_PATH"
 
-python3 "$SCRIPT_PATH" --register \
-  --ingest-url "$INGEST_URL" \
-  --collector-token "$COLLECTOR_TOKEN" \
-  --org-id "${ORG_ID:-}" \
-  --account-label "${ACCOUNT_LABEL:-}" \
-  --collector-label "${COLLECTOR_LABEL:-$(hostname)}" \
-  --claude-dir "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" \
-  --sync-interval-minutes "$SYNC_INTERVAL_MINUTES"
+if [ -n "${COLLECTOR_TOKEN:-}" ]; then
+  python3 "$SCRIPT_PATH" --register \
+    --ingest-url "$INGEST_URL" \
+    --collector-token "$COLLECTOR_TOKEN" \
+    --org-id "${ORG_ID:-}" \
+    --account-label "${ACCOUNT_LABEL:-}" \
+    --collector-label "${COLLECTOR_LABEL:-$(hostname)}" \
+    --claude-dir "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" \
+    --sync-interval-minutes "$SYNC_INTERVAL_MINUTES"
+else
+  python3 "$SCRIPT_PATH" --enroll \
+    --enroll-url "$ENROLL_URL" \
+    --org-id "${ORG_ID:-}" \
+    --account-label "${ACCOUNT_LABEL:-}" \
+    --collector-label "${COLLECTOR_LABEL:-$(hostname)}" \
+    --claude-dir "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" \
+    --sync-interval-minutes "$SYNC_INTERVAL_MINUTES"
+fi
 
 case "$(uname -s)" in
   Darwin)
