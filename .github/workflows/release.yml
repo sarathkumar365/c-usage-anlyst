@@ -59,15 +59,35 @@ jobs:
         shell: pwsh
         run: Copy-Item "dist/${{ matrix.output_name }}" "${{ matrix.asset_name }}"
 
-      - name: Upload release asset
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: ${{ matrix.asset_name }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish release assets
+    runs-on: ubuntu-24.04
+    needs: build
+
+    steps:
+      - name: Download workflow artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish assets
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes "Claude Usage Agent ${GITHUB_REF_NAME}"
-            gh release upload "${GITHUB_REF_NAME}" "${{ matrix.asset_name }}" --clobber
+            RELEASE_NAME="${GITHUB_REF_NAME}"
+            gh release view "$RELEASE_NAME" >/dev/null 2>&1 || gh release create "$RELEASE_NAME" --title "$RELEASE_NAME" --notes "Claude Usage Agent $RELEASE_NAME"
           else
-            gh release view "dev-latest" >/dev/null 2>&1 || gh release create "dev-latest" --prerelease --title "dev-latest" --notes "Manual development build"
-            gh release upload "dev-latest" "${{ matrix.asset_name }}" --clobber
+            RELEASE_NAME="dev-latest"
+            gh release view "$RELEASE_NAME" >/dev/null 2>&1 || gh release create "$RELEASE_NAME" --prerelease --title "$RELEASE_NAME" --notes "Manual development build"
           fi
+          gh release upload "$RELEASE_NAME" release-assets/* --clobber
