@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Claude Usage Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --ink: #17202a;
+      --muted: #667085;
+      --line: #d9dee7;
+      --blue: #2563eb;
+      --green: #138a4b;
+      --yellow: #b7791f;
+      --red: #c7362f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 24px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    h1 { font-size: 18px; margin: 0; letter-spacing: 0; }
+    main { padding: 24px; max-width: 1320px; margin: 0 auto; }
+    section { margin-bottom: 26px; }
+    h2 { font-size: 14px; margin: 0 0 12px; color: #344054; text-transform: uppercase; letter-spacing: 0; }
+    .setup {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      align-items: end;
+    }
+    label { display: grid; gap: 6px; font-size: 12px; color: var(--muted); }
+    input {
+      width: 100%;
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font: inherit;
+      background: #fff;
+      color: var(--ink);
+    }
+    button {
+      min-height: 38px;
+      border: 0;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font: inherit;
+      font-weight: 650;
+      background: var(--blue);
+      color: #fff;
+      cursor: pointer;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+    }
+    .metric-label { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+    .metric-value { font-size: 26px; font-weight: 750; white-space: nowrap; }
+    .good { color: var(--green); }
+    .warn { color: var(--yellow); }
+    .bad { color: var(--red); }
+    .muted { color: var(--muted); }
+    .split {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 14px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      font-size: 13px;
+      vertical-align: top;
+    }
+    th { color: var(--muted); font-size: 12px; background: #fbfcfe; }
+    tr:last-child td { border-bottom: 0; }
+    .status { font-size: 13px; color: var(--muted); }
+    .pill {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: #eef2f7;
+      font-size: 12px;
+    }
+    @media (max-width: 900px) {
+      .setup, .grid, .split { grid-template-columns: 1fr; }
+      header { align-items: flex-start; flex-direction: column; }
+      main { padding: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Claude Usage Dashboard</h1>
+    <div class="status" id="status">Not connected</div>
+  </header>
+  <main>
+    <section class="card">
+      <h2>Connection</h2>
+      <div class="setup">
+        <label>Supabase URL <input id="supabaseUrl" placeholder="https://xxx.supabase.co"></label>
+        <label>Anon key <input id="anonKey" placeholder="eyJ..."></label>
+        <label>Org ID <input id="orgId" placeholder="team-main"></label>
+        <label>Email <input id="email" placeholder="you@company.com"></label>
+        <button id="save">Save</button>
+        <button id="login">Send login link</button>
+        <button id="refresh">Refresh</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Overview</h2>
+      <div class="grid" id="metrics"></div>
+    </section>
+
+    <section class="split">
+      <div>
+        <h2>Usage By Person</h2>
+        <table id="users"></table>
+      </div>
+      <div>
+        <h2>Usage By Project</h2>
+        <table id="projects"></table>
+      </div>
+    </section>
+
+    <section class="split">
+      <div>
+        <h2>Usage By Model</h2>
+        <table id="models"></table>
+      </div>
+      <div>
+        <h2>Anomalies</h2>
+        <table id="anomalies"></table>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const DEFAULT_SUPABASE_URL = "https://yeokmzmmldqjngwtrfso.supabase.co";
+    const DEFAULT_PUBLISHABLE_KEY = "sb_publishable_0NqZnygxACHzi6jMGr2sJA_1TOPXFId";
+    const DEFAULT_ORG_ID = "team-main";
+    const fmt = (n) => {
+      n = Number(n || 0);
+      if (Math.abs(n) >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
+      if (Math.abs(n) >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
+      if (Math.abs(n) >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
+      return `${Math.round(n)}`;
+    };
+    const pct = (n) => `${(Number(n || 0) * 100).toFixed(1)}%`;
+    let client = null;
+
+    function loadSettings() {
+      for (const id of ["supabaseUrl", "anonKey", "orgId", "email"]) {
+        $(id).value = localStorage.getItem(id) || "";
+      }
+      if (!$("supabaseUrl").value) $("supabaseUrl").value = DEFAULT_SUPABASE_URL;
+      if (!$("anonKey").value) $("anonKey").value = DEFAULT_PUBLISHABLE_KEY;
+      if (!$("orgId").value) $("orgId").value = DEFAULT_ORG_ID;
+      connect();
+    }
+
+    function connect() {
+      const url = $("supabaseUrl").value.trim();
+      const key = $("anonKey").value.trim();
+      if (!url || !key) return;
+      client = window.supabase.createClient(url, key);
+      $("status").textContent = "Configured";
+    }
+
+    function saveSettings() {
+      for (const id of ["supabaseUrl", "anonKey", "orgId", "email"]) {
+        localStorage.setItem(id, $(id).value.trim());
+      }
+      connect();
+    }
+
+    async function login() {
+      saveSettings();
+      if (!client) return alert("Configure Supabase first.");
+      const email = $("email").value.trim();
+      if (!email) return alert("Enter an email address.");
+      const { error } = await client.auth.signInWithOtp({ email });
+      if (error) return alert(error.message);
+      $("status").textContent = "Login link sent";
+    }
+
+    function renderMetrics(rows, anomalies) {
+      const total = rows.reduce((sum, row) => sum + Number(row.reported_total || 0), 0);
+      const cache = rows.reduce((sum, row) => sum + Number(row.cache_read_input_tokens || 0) + Number(row.cache_creation_input_tokens || 0), 0);
+      const users = new Set(rows.map((row) => row.user_id)).size;
+      const machines = new Set(rows.map((row) => row.machine_id)).size;
+      const cacheShare = total ? cache / total : 0;
+      $("metrics").innerHTML = [
+        ["Total usage", fmt(total), "muted"],
+        ["Cache share", pct(cacheShare), cacheShare > 0.9 ? "bad" : "warn"],
+        ["People", users, "muted"],
+        ["Machines", machines, "muted"],
+        ["Open anomalies", anomalies.length, anomalies.length ? "warn" : "good"],
+      ].map(([label, value, cls]) => `
+        <div class="card">
+          <div class="metric-label">${label}</div>
+          <div class="metric-value ${cls}">${value}</div>
+        </div>
+      `).join("");
+    }
+
+    function group(rows, keyFn) {
+      const out = new Map();
+      for (const row of rows) {
+        const key = keyFn(row);
+        const existing = out.get(key) || { key, tokens: 0, requests: 0 };
+        existing.tokens += Number(row.reported_total || 0);
+        existing.requests += Number(row.requests || 0);
+        out.set(key, existing);
+      }
+      return [...out.values()].sort((a, b) => b.tokens - a.tokens);
+    }
+
+    function table(id, headers, rows) {
+      $(id).innerHTML = `
+        <thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead>
+        <tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join("")}</tr>`).join("")}</tbody>
+      `;
+    }
+
+    async function refresh() {
+      saveSettings();
+      if (!client) return alert("Configure Supabase first.");
+      const orgId = $("orgId").value.trim();
+      if (!orgId) return alert("Enter an Org ID.");
+
+      $("status").textContent = "Loading...";
+      const { data: usage, error: usageError } = await client
+        .from("usage_daily")
+        .select("*")
+        .eq("org_id", orgId)
+        .order("day", { ascending: false })
+        .limit(5000);
+      if (usageError) return alert(usageError.message);
+
+      const { data: anomalyRows, error: anomalyError } = await client
+        .from("usage_anomalies")
+        .select("*")
+        .eq("org_id", orgId)
+        .order("last_seen_at", { ascending: false })
+        .limit(100);
+      if (anomalyError) return alert(anomalyError.message);
+
+      const rows = usage || [];
+      const anomalies = anomalyRows || [];
+      const total = rows.reduce((sum, row) => sum + Number(row.reported_total || 0), 0);
+      renderMetrics(rows, anomalies);
+      table("users", ["User", "Machine", "Tokens", "Share", "Requests"], group(rows, (r) => `${r.user_id}|${r.machine_id}`).slice(0, 20).map((r) => {
+        const [user, machine] = r.key.split("|");
+        return [`<span class="pill">${user.slice(0, 10)}</span>`, machine.slice(0, 10), fmt(r.tokens), total ? pct(r.tokens / total) : "0.0%", r.requests];
+      }));
+      table("projects", ["Project", "Tokens", "Share", "Requests"], group(rows, (r) => r.project_name || r.project).slice(0, 20).map((r) => [
+        r.key, fmt(r.tokens), total ? pct(r.tokens / total) : "0.0%", r.requests
+      ]));
+      table("models", ["Model", "Tokens", "Share", "Requests"], group(rows, (r) => r.model).slice(0, 20).map((r) => [
+        r.key, fmt(r.tokens), total ? pct(r.tokens / total) : "0.0%", r.requests
+      ]));
+      table("anomalies", ["Severity", "Message", "Last seen"], anomalies.map((r) => [
+        `<span class="${r.severity === "bad" ? "bad" : "warn"}">${r.severity}</span>`,
+        r.message,
+        new Date(r.last_seen_at).toLocaleString(),
+      ]));
+      $("status").textContent = `Loaded ${rows.length} rows`;
+    }
+
+    $("save").addEventListener("click", saveSettings);
+    $("login").addEventListener("click", login);
+    $("refresh").addEventListener("click", refresh);
+    loadSettings();
+  </script>
+</body>
+</html>
