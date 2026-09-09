@@ -69,8 +69,8 @@ The installer runs a preflight system check, downloads the native agent binary f
 Release binaries are built by GitHub Actions when a version tag is pushed:
 
 ```bash
-git tag v0.4.2
-git push github v0.4.2
+git tag v0.4.3
+git push github v0.4.3
 ```
 
 ## Manual Collector Commands
