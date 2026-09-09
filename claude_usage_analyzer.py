@@ -48,6 +48,7 @@ import math
 import os
 import platform
 import re
+import shutil
 import statistics
 import sys
 import socket
@@ -61,9 +62,10 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.4.0"
 DEFAULT_SYNC_INTERVAL_MINUTES = 30
 DEFAULT_ENROLL_URL = "https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/enroll"
+DEFAULT_INGEST_URL = "https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/ingest"
 
 CLAUDE_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")).expanduser()
 PROJECTS_DIR = CLAUDE_DIR / "projects"
@@ -77,6 +79,14 @@ ANSI = {
     "yellow": "\033[33m",
     "green": "\033[32m",
     "cyan": "\033[36m",
+}
+
+CHECK_STYLES = {
+    "OK": "green",
+    "WARN": "yellow",
+    "BLOCKED": "red",
+    "INFO": "cyan",
+    "READY": "green",
 }
 
 MODEL_PRICES_USD_PER_M = {
@@ -277,11 +287,11 @@ def sentence_join(items: list[str]) -> str:
 
 def friendly_tool_name(name: str) -> str:
     if name.startswith("mcp__Claude_Browser__"):
-        browser_tool = name.removeprefix("mcp__Claude_Browser__").replace("_", " ")
+        browser_tool = name[len("mcp__Claude_Browser__"):].replace("_", " ")
         browser_tool = browser_tool.replace("javascript", "JavaScript")
         return "Browser " + browser_tool
     if name.startswith("mcp__"):
-        return "MCP " + name.removeprefix("mcp__").replace("__", " ").replace("_", " ")
+        return "MCP " + name[len("mcp__"):].replace("__", " ").replace("_", " ")
     return name
 
 
@@ -567,6 +577,155 @@ def enroll_collector(args: argparse.Namespace):
     print(f"ID     : {collector_id}")
     print(f"Label  : {config['collector_label']}")
     print(f"Sync   : every {config['sync_interval_minutes']} minutes")
+
+
+def probe_url(url: str, method: str = "GET", timeout: int = 10) -> tuple[bool, str]:
+    try:
+        req = urllib.request.Request(url, method=method)
+        req.add_header("User-Agent", f"claude-usage-agent/{APP_VERSION}")
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return 200 <= response.status < 500, f"HTTP {response.status}"
+    except urllib.error.HTTPError as exc:
+        return exc.code < 500, f"HTTP {exc.code}"
+    except Exception as exc:
+        return False, str(exc)
+
+
+def scheduler_status() -> tuple[str, str, bool]:
+    system = platform.system()
+    if system == "Darwin":
+        return "LaunchAgent", "available" if shutil.which("launchctl") else "launchctl missing", bool(shutil.which("launchctl"))
+    if system == "Linux":
+        if shutil.which("systemctl"):
+            return "systemd user timer", "available", True
+        if shutil.which("crontab"):
+            return "cron", "available", True
+        return "scheduler", "systemctl and crontab missing", False
+    if system == "Windows":
+        return "Task Scheduler", "available" if shutil.which("schtasks") else "schtasks missing", bool(shutil.which("schtasks"))
+    return "scheduler", f"unsupported OS: {system or os.name}", False
+
+
+def print_preflight_check(status: str, label: str, detail: str = "", fix: str = ""):
+    print(f"{c(status.ljust(8), CHECK_STYLES.get(status, 'cyan'))} {label}{(': ' + detail) if detail else ''}")
+    if fix:
+        print(f"{c('FIX'.ljust(8), 'cyan')} {fix}")
+
+
+def run_preflight(args: argparse.Namespace) -> int:
+    config = load_agent_config()
+    configure_claude_dir(args.claude_dir or config.get("claude_config_dir") or os.environ.get("CLAUDE_CONFIG_DIR"))
+
+    print()
+    print(c("SYSTEM CHECK", "bold"))
+    print(c("-" * 36, "cyan"))
+
+    blocked = 0
+    warnings = 0
+    system = platform.system() or os.name
+    machine = platform.machine().lower()
+    supported = (
+        (system == "Darwin" and machine in {"arm64", "aarch64", "x86_64", "amd64"}) or
+        (system == "Linux" and machine in {"arm64", "aarch64", "x86_64", "amd64"}) or
+        (system == "Windows" and machine in {"x86_64", "amd64"})
+    )
+    if supported:
+        print_preflight_check("OK", "OS supported", f"{system} {platform.machine()}")
+    else:
+        blocked += 1
+        print_preflight_check("BLOCKED", "OS supported", f"{system} {platform.machine()}", "Use macOS/Linux arm64/x64 or Windows x64.")
+
+    try:
+        app_dir().mkdir(parents=True, exist_ok=True)
+        test_path = app_dir() / ".write-test"
+        test_path.write_text("ok", encoding="utf-8")
+        test_path.unlink()
+        print_preflight_check("OK", "Install dir writable", str(app_dir()))
+    except Exception as exc:
+        blocked += 1
+        print_preflight_check("BLOCKED", "Install dir writable", str(exc), "Run as a normal user with a writable home directory.")
+
+    try:
+        usage = shutil.disk_usage(str(app_dir()))
+        free_mb = usage.free // (1024 * 1024)
+        if free_mb >= 100:
+            print_preflight_check("OK", "Disk space", f"{free_mb} MB free")
+        else:
+            blocked += 1
+            print_preflight_check("BLOCKED", "Disk space", f"{free_mb} MB free", "Free at least 100 MB.")
+    except Exception as exc:
+        warnings += 1
+        print_preflight_check("WARN", "Disk space", str(exc))
+
+    now = datetime.now(timezone.utc)
+    if 2024 <= now.year <= 2035:
+        print_preflight_check("OK", "System clock", now.isoformat(timespec="seconds"))
+    else:
+        blocked += 1
+        print_preflight_check("BLOCKED", "System clock", now.isoformat(timespec="seconds"), "Fix the machine date/time.")
+
+    for label, url, method in (
+        ("GitHub reachable", args.release_asset_url, "HEAD"),
+        ("Supabase enroll reachable", args.enroll_url, "OPTIONS"),
+        ("Supabase ingest reachable", args.ingest_url or DEFAULT_INGEST_URL, "OPTIONS"),
+    ):
+        if not url:
+            warnings += 1
+            print_preflight_check("WARN", label, "not configured")
+            continue
+        ok, detail = probe_url(url, method=method)
+        if ok:
+            print_preflight_check("OK", label, detail)
+        else:
+            blocked += 1
+            print_preflight_check("BLOCKED", label, detail, "Check internet access, proxy/VPN, or firewall rules.")
+
+    if CLAUDE_DIR.exists():
+        print_preflight_check("OK", "Claude dir", str(CLAUDE_DIR))
+    else:
+        warnings += 1
+        print_preflight_check("WARN", "Claude dir", f"missing at {CLAUDE_DIR}", "Install/use Claude Code once, or set CLAUDE_CONFIG_DIR.")
+
+    if PROJECTS_DIR.exists():
+        try:
+            has_jsonl = any(PROJECTS_DIR.rglob("*.jsonl"))
+        except Exception:
+            has_jsonl = False
+        if has_jsonl:
+            print_preflight_check("OK", "Claude transcripts", "JSONL files found")
+        else:
+            warnings += 1
+            print_preflight_check("WARN", "Claude transcripts", "no JSONL files found yet")
+    else:
+        warnings += 1
+        print_preflight_check("WARN", "Claude projects dir", f"missing at {PROJECTS_DIR}")
+
+    if STATS_CACHE.exists():
+        print_preflight_check("OK", "Claude stats cache", str(STATS_CACHE))
+    else:
+        warnings += 1
+        print_preflight_check("WARN", "Claude stats cache", f"missing at {STATS_CACHE}")
+
+    scheduler, detail, scheduler_ok = scheduler_status()
+    if scheduler_ok:
+        print_preflight_check("OK", "Scheduler available", scheduler)
+    else:
+        blocked += 1
+        print_preflight_check("BLOCKED", "Scheduler available", detail, "Install a user-level scheduler or run sync manually.")
+
+    if config:
+        state = load_agent_state()
+        print_preflight_check("INFO", "Existing install", config.get("collector_id", "configured"))
+        print_preflight_check("INFO", "Last sync", state.get("last_sync_at", "never"))
+    else:
+        print_preflight_check("INFO", "Existing install", "none")
+
+    print()
+    if blocked:
+        print_preflight_check("BLOCKED", "Install cannot continue", f"{blocked} blocking issue(s), {warnings} warning(s)")
+        return 2
+    print_preflight_check("READY", "Install can continue", f"{warnings} warning(s)")
+    return 0
 
 
 def print_status():
@@ -1826,6 +1985,8 @@ def main():
                         help="Save collector configuration for background/team sync.")
     parser.add_argument("--enroll", action="store_true",
                         help="Enroll this machine with the team backend and save collector configuration.")
+    parser.add_argument("--preflight", action="store_true",
+                        help="Check whether this machine is ready for collector install/sync.")
     parser.add_argument("--status", action="store_true",
                         help="Show collector install, identity, sync, and Claude data status.")
     parser.add_argument("--sync", action="store_true",
@@ -1838,6 +1999,8 @@ def main():
                         help="Collector registration/upload token. Stored locally by --register.")
     parser.add_argument("--enroll-url", default=DEFAULT_ENROLL_URL,
                         help=f"HTTPS enrollment endpoint. Default: {DEFAULT_ENROLL_URL}.")
+    parser.add_argument("--release-asset-url", default="",
+                        help="Optional release asset URL to test during --preflight.")
     parser.add_argument("--org-id", help="Optional organization/team identifier for uploaded payloads.")
     parser.add_argument("--account-label",
                         help="Optional human label for the Claude account/team being used.")
@@ -1877,6 +2040,9 @@ def main():
     if args.status:
         print_status()
         return
+
+    if args.preflight:
+        sys.exit(run_preflight(args))
 
     paths = discover_jsonl()
     if not paths and not args.sync:

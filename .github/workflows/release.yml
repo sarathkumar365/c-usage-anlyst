@@ -1,0 +1,73 @@
+name: Release Agent Binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset_name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            asset_name: claude-usage-agent-linux-x64
+            output_name: claude-usage-agent
+          - runner: ubuntu-24.04-arm
+            asset_name: claude-usage-agent-linux-arm64
+            output_name: claude-usage-agent
+          - runner: macos-15-intel
+            asset_name: claude-usage-agent-darwin-x64
+            output_name: claude-usage-agent
+          - runner: macos-15
+            asset_name: claude-usage-agent-darwin-arm64
+            output_name: claude-usage-agent
+          - runner: windows-2025
+            asset_name: claude-usage-agent-windows-x64.exe
+            output_name: claude-usage-agent.exe
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PyInstaller
+        run: python -m pip install pyinstaller==6.22.2
+
+      - name: Build standalone executable
+        run: pyinstaller --onefile --name claude-usage-agent claude_usage_analyzer.py
+
+      - name: Stage Unix asset
+        if: runner.os != 'Windows'
+        run: |
+          chmod +x "dist/${{ matrix.output_name }}"
+          cp "dist/${{ matrix.output_name }}" "${{ matrix.asset_name }}"
+
+      - name: Stage Windows asset
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Copy-Item "dist/${{ matrix.output_name }}" "${{ matrix.asset_name }}"
+
+      - name: Upload release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes "Claude Usage Agent ${GITHUB_REF_NAME}"
+            gh release upload "${GITHUB_REF_NAME}" "${{ matrix.asset_name }}" --clobber
+          else
+            gh release view "dev-latest" >/dev/null 2>&1 || gh release create "dev-latest" --prerelease --title "dev-latest" --notes "Manual development build"
+            gh release upload "dev-latest" "${{ matrix.asset_name }}" --clobber
+          fi

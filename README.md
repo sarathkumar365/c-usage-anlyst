@@ -64,7 +64,14 @@ Windows PowerShell:
 irm https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/main/install/install.ps1 | iex
 ```
 
-The installer enrolls the machine, stores user-level config, schedules a sync every 30 minutes, and runs one immediate sync. If you need the old explicit-token install path, set `COLLECTOR_TOKEN` before running the installer.
+The installer runs a preflight system check, downloads the native agent binary for the user's OS/CPU when a GitHub Release asset is available, enrolls the machine, stores user-level config, schedules a sync every 30 minutes, and runs one immediate sync. If release binaries are unavailable, it falls back to the Python script when Python 3.8+ is installed. If you need the old explicit-token install path, set `COLLECTOR_TOKEN` before running the installer.
+
+Release binaries are built by GitHub Actions when a version tag is pushed:
+
+```bash
+git tag v0.4.0
+git push github v0.4.0
+```
 
 ## Manual Collector Commands
 
