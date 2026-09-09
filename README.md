@@ -26,6 +26,7 @@ Ref     : yeokmzmmldqjngwtrfso
 URL     : https://yeokmzmmldqjngwtrfso.supabase.co
 Org ID  : team-main
 Ingest  : https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/ingest
+Dashboard: https://c-usage-anlyst.poetic-whale-8476.chatgpt.site
 ```
 
 Example SQL for first setup:
