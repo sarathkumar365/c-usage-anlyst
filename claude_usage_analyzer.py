@@ -49,6 +49,7 @@ import os
 import platform
 import re
 import shutil
+import ssl
 import statistics
 import sys
 import socket
@@ -62,7 +63,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.4.1"
 DEFAULT_SYNC_INTERVAL_MINUTES = 30
 DEFAULT_ENROLL_URL = "https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/enroll"
 DEFAULT_INGEST_URL = "https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/ingest"
@@ -492,6 +493,14 @@ def register_collector(args: argparse.Namespace):
     print(f"Label  : {config['collector_label']}")
 
 
+def https_context() -> ssl.SSLContext | None:
+    try:
+        import certifi  # type: ignore
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return None
+
+
 def post_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None = None, timeout: int = 30) -> dict[str, Any]:
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
@@ -504,8 +513,12 @@ def post_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None 
             **(headers or {}),
         },
     )
+    kwargs = {"timeout": timeout}
+    context = https_context()
+    if context is not None:
+        kwargs["context"] = context
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
+        with urllib.request.urlopen(req, **kwargs) as response:
             text = response.read().decode("utf-8", errors="ignore")
             try:
                 parsed = json.loads(text) if text else {}
@@ -583,7 +596,11 @@ def probe_url(url: str, method: str = "GET", timeout: int = 10) -> tuple[bool, s
     try:
         req = urllib.request.Request(url, method=method)
         req.add_header("User-Agent", f"claude-usage-agent/{APP_VERSION}")
-        with urllib.request.urlopen(req, timeout=timeout) as response:
+        kwargs = {"timeout": timeout}
+        context = https_context()
+        if context is not None:
+            kwargs["context"] = context
+        with urllib.request.urlopen(req, **kwargs) as response:
             return 200 <= response.status < 500, f"HTTP {response.status}"
     except urllib.error.HTTPError as exc:
         return exc.code < 500, f"HTTP {exc.code}"
