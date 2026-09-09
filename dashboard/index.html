@@ -199,14 +199,49 @@
       const url = $("supabaseUrl").value.trim();
       const key = $("anonKey").value.trim();
       if (!url || !key) return;
-      client = window.supabase.createClient(url, key);
+      client = window.supabase.createClient(url, key, {
+        auth: {
+          detectSessionInUrl: true,
+          persistSession: true,
+          autoRefreshToken: true,
+        },
+      });
       $("status").textContent = "Configured";
-      updateAuthStatus();
+      restoreSessionFromUrl().then(updateAuthStatus);
+    }
+
+    async function restoreSessionFromUrl() {
+      if (!client || !window.location.hash) return false;
+      const params = new URLSearchParams(window.location.hash.slice(1));
+      const accessToken = params.get("access_token");
+      const refreshToken = params.get("refresh_token");
+      if (!accessToken || !refreshToken) return false;
+
+      const { error } = await client.auth.setSession({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+      });
+      if (error) {
+        $("status").textContent = `Sign-in failed: ${error.message}`;
+        return false;
+      }
+
+      history.replaceState(null, document.title, window.location.pathname + window.location.search);
+      $("status").textContent = "Signed in to Supabase";
+      return true;
     }
 
     async function updateAuthStatus() {
       if (!client) return;
-      const { data } = await client.auth.getUser();
+      const sessionResult = await client.auth.getSession();
+      if (!sessionResult.data?.session && window.location.hash) {
+        await restoreSessionFromUrl();
+      }
+      const { data, error } = await client.auth.getUser();
+      if (error) {
+        $("status").textContent = `Auth check failed: ${error.message}`;
+        return null;
+      }
       if (data?.user) {
         $("status").textContent = `Signed in: ${data.user.email || data.user.id} | User ID: ${data.user.id}`;
         return data.user;
