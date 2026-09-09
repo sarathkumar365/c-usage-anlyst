@@ -8,15 +8,22 @@
   <style>
     :root {
       color-scheme: light;
-      --bg: #f6f7f9;
-      --panel: #ffffff;
-      --ink: #17202a;
+      --bg: #f4f6f8;
+      --surface: #ffffff;
+      --surface-2: #f9fafb;
+      --ink: #111827;
       --muted: #667085;
-      --line: #d9dee7;
-      --blue: #2563eb;
-      --green: #138a4b;
-      --yellow: #b7791f;
-      --red: #c7362f;
+      --line: #d8dee8;
+      --line-soft: #edf0f4;
+      --blue: #1d4ed8;
+      --blue-soft: #e8efff;
+      --green: #087443;
+      --green-soft: #e7f6ec;
+      --yellow: #a15c07;
+      --yellow-soft: #fff3d6;
+      --red: #b42318;
+      --red-soft: #fee4e2;
+      --shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
     }
     * { box-sizing: border-box; }
     body {
@@ -26,155 +33,346 @@
       color: var(--ink);
     }
     header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) auto;
       gap: 16px;
+      align-items: center;
       padding: 18px 24px;
+      background: var(--surface);
       border-bottom: 1px solid var(--line);
-      background: var(--panel);
       position: sticky;
       top: 0;
-      z-index: 2;
+      z-index: 4;
     }
-    h1 { font-size: 18px; margin: 0; letter-spacing: 0; }
-    main { padding: 24px; max-width: 1320px; margin: 0 auto; }
-    section { margin-bottom: 26px; }
-    h2 { font-size: 14px; margin: 0 0 12px; color: #344054; text-transform: uppercase; letter-spacing: 0; }
-    .setup {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 10px;
-      align-items: end;
-    }
-    label { display: grid; gap: 6px; font-size: 12px; color: var(--muted); }
-    input {
-      width: 100%;
-      min-height: 38px;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      padding: 8px 10px;
+    h1 { margin: 0; font-size: 18px; font-weight: 760; letter-spacing: 0; }
+    h2 { margin: 0; font-size: 14px; font-weight: 760; color: #344054; letter-spacing: 0; }
+    h3 { margin: 0; font-size: 13px; font-weight: 760; color: #344054; letter-spacing: 0; }
+    main { max-width: 1440px; margin: 0 auto; padding: 18px 24px 32px; }
+    button, input, select {
       font: inherit;
-      background: #fff;
-      color: var(--ink);
+      border-radius: 6px;
     }
     button {
-      min-height: 38px;
-      border: 0;
-      border-radius: 6px;
-      padding: 8px 12px;
-      font: inherit;
-      font-weight: 650;
+      min-height: 36px;
+      border: 1px solid #1d4ed8;
       background: var(--blue);
       color: #fff;
+      font-weight: 700;
+      padding: 7px 12px;
       cursor: pointer;
+      white-space: nowrap;
     }
-    .grid {
+    button.secondary {
+      background: #fff;
+      color: #344054;
+      border-color: var(--line);
+    }
+    button.ghost {
+      background: transparent;
+      border-color: transparent;
+      color: var(--blue);
+      min-height: 28px;
+      padding: 3px 6px;
+    }
+    input, select {
+      min-height: 36px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      padding: 7px 10px;
+      width: 100%;
+    }
+    label { display: grid; gap: 5px; font-size: 12px; color: var(--muted); }
+    .status { font-size: 13px; color: var(--muted); text-align: right; }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: end;
+      justify-content: flex-end;
+    }
+    .toolbar label { width: 150px; }
+    .setup {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 12px;
+      grid-template-columns: minmax(240px, 1.5fr) minmax(280px, 2fr) minmax(120px, 0.8fr) minmax(220px, 1.2fr) auto auto;
+      gap: 10px;
+      align-items: end;
+      margin-bottom: 18px;
     }
-    .card {
-      background: var(--panel);
+    .band {
+      background: var(--surface);
       border: 1px solid var(--line);
       border-radius: 8px;
+      box-shadow: var(--shadow);
       padding: 14px;
+      margin-bottom: 16px;
     }
-    .metric-label { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
-    .metric-value { font-size: 26px; font-weight: 750; white-space: nowrap; }
-    .good { color: var(--green); }
-    .warn { color: var(--yellow); }
-    .bad { color: var(--red); }
-    .muted { color: var(--muted); }
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .metric {
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      padding: 12px;
+      background: var(--surface-2);
+      min-height: 86px;
+    }
+    .metric-label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+    .metric-value { font-size: 24px; line-height: 1.1; font-weight: 800; white-space: nowrap; }
+    .metric-note { color: var(--muted); font-size: 12px; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.65fr);
+      gap: 16px;
+      align-items: start;
+    }
+    .layout > *, .split > *, .stack, .band { min-width: 0; }
+    .stack { display: grid; gap: 16px; }
     .split {
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-      gap: 14px;
+      gap: 16px;
+    }
+    .table-wrap {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: auto;
+      background: var(--surface);
     }
     table {
       width: 100%;
       border-collapse: collapse;
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      overflow: hidden;
+      min-width: 760px;
     }
     th, td {
       padding: 10px 12px;
-      border-bottom: 1px solid var(--line);
+      border-bottom: 1px solid var(--line-soft);
       text-align: left;
       font-size: 13px;
-      vertical-align: top;
+      vertical-align: middle;
     }
-    th { color: var(--muted); font-size: 12px; background: #fbfcfe; }
+    th {
+      position: sticky;
+      top: 0;
+      background: #fbfcfe;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+      z-index: 1;
+    }
     tr:last-child td { border-bottom: 0; }
-    .status { font-size: 13px; color: var(--muted); }
-    .pill {
-      display: inline-block;
-      padding: 2px 7px;
+    tbody tr { cursor: pointer; }
+    tbody tr:hover { background: #f8fbff; }
+    tbody tr.selected { background: var(--blue-soft); }
+    .name { font-weight: 750; color: #101828; }
+    .subtle { color: var(--muted); font-size: 12px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
       border-radius: 999px;
-      background: #eef2f7;
+      padding: 3px 8px;
       font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
     }
-    @media (max-width: 900px) {
-      .setup, .grid, .split { grid-template-columns: 1fr; }
-      header { align-items: flex-start; flex-direction: column; }
-      main { padding: 16px; }
+    .badge.good { color: var(--green); background: var(--green-soft); }
+    .badge.warn { color: var(--yellow); background: var(--yellow-soft); }
+    .badge.bad { color: var(--red); background: var(--red-soft); }
+    .badge.neutral { color: #344054; background: #eef2f7; }
+    .bar {
+      height: 8px;
+      width: 100%;
+      min-width: 84px;
+      background: #eaecf0;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .bar > span { display: block; height: 100%; background: var(--blue); border-radius: inherit; }
+    .driver-list { display: grid; gap: 10px; }
+    .driver {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 10px;
+      align-items: center;
+      border-bottom: 1px solid var(--line-soft);
+      padding-bottom: 10px;
+    }
+    .driver:last-child { border-bottom: 0; padding-bottom: 0; }
+    .empty {
+      color: var(--muted);
+      font-size: 13px;
+      padding: 18px;
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      background: var(--surface-2);
+    }
+    dialog {
+      width: min(420px, calc(100vw - 32px));
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 18px 60px rgba(16, 24, 40, 0.22);
+      padding: 0;
+    }
+    dialog::backdrop { background: rgba(17, 24, 39, 0.32); }
+    .modal-body { padding: 16px; display: grid; gap: 12px; }
+    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; padding: 12px 16px; border-top: 1px solid var(--line); }
+    .good { color: var(--green); }
+    .warn { color: var(--yellow); }
+    .bad { color: var(--red); }
+    @media (max-width: 1100px) {
+      header, .layout, .split { grid-template-columns: 1fr; }
+      .status { text-align: left; }
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .setup { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 680px) {
+      main { padding: 14px; }
+      .metrics, .setup { grid-template-columns: 1fr; }
+      .toolbar { justify-content: stretch; }
+      .toolbar label, .toolbar button { width: 100%; }
+      table { min-width: 680px; }
     }
   </style>
 </head>
 <body>
   <header>
-    <h1>Claude Usage Dashboard</h1>
+    <div>
+      <h1>Claude Usage Operations</h1>
+      <div class="subtle" id="headline">Attribution, drivers, and collector health for team-main</div>
+    </div>
     <div class="status" id="status">Not connected</div>
   </header>
+
   <main>
-    <section class="card">
-      <h2>Connection</h2>
+    <section class="band">
       <div class="setup">
         <label>Supabase URL <input id="supabaseUrl" placeholder="https://xxx.supabase.co"></label>
-        <label>Anon key <input id="anonKey" placeholder="eyJ..."></label>
+        <label>Publishable key <input id="anonKey" placeholder="sb_publishable_..."></label>
         <label>Org ID <input id="orgId" placeholder="team-main"></label>
         <label>Email <input id="email" placeholder="you@company.com"></label>
         <button id="save">Save</button>
-        <button id="login">Send login link</button>
+        <button id="login" class="secondary">Send login link</button>
+      </div>
+      <div class="toolbar">
+        <label>Window
+          <select id="windowDays">
+            <option value="7">Last 7 days</option>
+            <option value="30" selected>Last 30 days</option>
+            <option value="90">Last 90 days</option>
+            <option value="all">All time</option>
+          </select>
+        </label>
         <button id="refresh">Refresh</button>
+        <button id="exportPeople" class="secondary">Export people</button>
+        <button id="exportProjects" class="secondary">Export projects</button>
+        <button id="exportModels" class="secondary">Export models</button>
       </div>
     </section>
 
-    <section>
-      <h2>Overview</h2>
-      <div class="grid" id="metrics"></div>
-    </section>
+    <section class="metrics" id="metrics"></section>
 
-    <section class="split">
-      <div>
-        <h2>Usage By Person</h2>
-        <table id="users"></table>
-      </div>
-      <div>
-        <h2>Usage By Project</h2>
-        <table id="projects"></table>
-      </div>
-    </section>
+    <div class="layout">
+      <div class="stack">
+        <section class="band">
+          <div class="section-head">
+            <h2>People And Machines</h2>
+            <span class="subtle" id="peopleCount">No data loaded</span>
+          </div>
+          <div class="table-wrap"><table id="people"></table></div>
+        </section>
 
-    <section class="split">
-      <div>
-        <h2>Usage By Model</h2>
-        <table id="models"></table>
+        <section class="split">
+          <div class="band">
+            <div class="section-head">
+              <h2>Person -> Project</h2>
+              <button id="clearSelection" class="ghost">Show team</button>
+            </div>
+            <div class="table-wrap"><table id="projects"></table></div>
+          </div>
+          <div class="band">
+            <div class="section-head">
+              <h2>Person -> Model</h2>
+              <span class="subtle">Attributed model mix</span>
+            </div>
+            <div class="table-wrap"><table id="models"></table></div>
+          </div>
+        </section>
+
+        <section class="band">
+          <div class="section-head">
+            <h2>High Usage Sessions</h2>
+            <span class="subtle">Highest-token work, attributed</span>
+          </div>
+          <div class="table-wrap"><table id="sessions"></table></div>
+        </section>
       </div>
-      <div>
-        <h2>Anomalies</h2>
-        <table id="anomalies"></table>
-      </div>
-    </section>
+
+      <aside class="stack">
+        <section class="band">
+          <div class="section-head">
+            <h2>Usage Drivers</h2>
+            <span class="subtle" id="driverScope">Team</span>
+          </div>
+          <div class="driver-list" id="drivers"></div>
+        </section>
+
+        <section class="band">
+          <div class="section-head">
+            <h2>Selected Person</h2>
+            <span class="subtle" id="selectedScope">Team view</span>
+          </div>
+          <div id="personDetail" class="empty">Select a person to inspect their projects, models, machine, and collector health.</div>
+        </section>
+
+        <section class="band">
+          <div class="section-head">
+            <h2>Anomalies</h2>
+            <span class="subtle" id="anomalyCount">0 open</span>
+          </div>
+          <div class="table-wrap"><table id="anomalies"></table></div>
+        </section>
+      </aside>
+    </div>
   </main>
+
+  <dialog id="aliasDialog">
+    <form method="dialog">
+      <div class="modal-body">
+        <h2 id="aliasTitle">Edit Alias</h2>
+        <div class="subtle" id="aliasMeta"></div>
+        <label>Display name <input id="aliasName" autocomplete="off"></label>
+        <div class="subtle">Leave blank and save to remove the alias. The fallback label will be used.</div>
+      </div>
+      <div class="modal-actions">
+        <button value="cancel" class="secondary">Cancel</button>
+        <button id="aliasSave" value="default">Save</button>
+      </div>
+    </form>
+  </dialog>
 
   <script>
     const $ = (id) => document.getElementById(id);
     const DEFAULT_SUPABASE_URL = "https://yeokmzmmldqjngwtrfso.supabase.co";
     const DEFAULT_PUBLISHABLE_KEY = "sb_publishable_0NqZnygxACHzi6jMGr2sJA_1TOPXFId";
     const DEFAULT_ORG_ID = "team-main";
+    const STALE_MS = 2 * 60 * 60 * 1000;
+    let client = null;
+    let selectedKey = null;
+    let aliasTarget = null;
+    let exportRows = { people: [], projects: [], models: [] };
+
     const fmt = (n) => {
       n = Number(n || 0);
       if (Math.abs(n) >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
@@ -183,7 +381,32 @@
       return `${Math.round(n)}`;
     };
     const pct = (n) => `${(Number(n || 0) * 100).toFixed(1)}%`;
-    let client = null;
+    const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+    const compactId = (value) => String(value || "").slice(0, 10);
+    const keyOf = (row) => [row.user_id, row.machine_id, row.collector_id, row.account_label || ""].join("|");
+    const sameIdentity = (row, key) => !key || keyOf(row) === key;
+    const cutoffDay = () => {
+      const value = $("windowDays").value;
+      if (value === "all") return null;
+      const date = new Date();
+      date.setDate(date.getDate() - Number(value));
+      return date.toISOString().slice(0, 10);
+    };
+    const timeAgo = (value) => {
+      if (!value) return "Never";
+      const ms = Date.now() - new Date(value).getTime();
+      if (!Number.isFinite(ms)) return "Unknown";
+      if (ms < 60_000) return "Just now";
+      if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m ago`;
+      if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h ago`;
+      return `${Math.round(ms / 86_400_000)}d ago`;
+    };
+    const healthFor = (row) => {
+      const lastSync = row.last_sync_at ? new Date(row.last_sync_at).getTime() : 0;
+      if (!lastSync || Date.now() - lastSync > STALE_MS) return ["bad", "Stale"];
+      if (Number(row.open_anomalies || 0) > 0 || row.stats_cache_missing) return ["warn", "Needs review"];
+      return ["good", "Healthy"];
+    };
 
     function loadSettings() {
       for (const id of ["supabaseUrl", "anonKey", "orgId", "email"]) {
@@ -200,11 +423,7 @@
       const key = $("anonKey").value.trim();
       if (!url || !key) return;
       client = window.supabase.createClient(url, key, {
-        auth: {
-          detectSessionInUrl: true,
-          persistSession: true,
-          autoRefreshToken: true,
-        },
+        auth: { detectSessionInUrl: true, persistSession: true, autoRefreshToken: true },
       });
       $("status").textContent = "Configured";
       restoreSessionFromUrl().then(updateAuthStatus);
@@ -216,37 +435,29 @@
       const accessToken = params.get("access_token");
       const refreshToken = params.get("refresh_token");
       if (!accessToken || !refreshToken) return false;
-
-      const { error } = await client.auth.setSession({
-        access_token: accessToken,
-        refresh_token: refreshToken,
-      });
+      const { error } = await client.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
       if (error) {
         $("status").textContent = `Sign-in failed: ${error.message}`;
         return false;
       }
-
       history.replaceState(null, document.title, window.location.pathname + window.location.search);
-      $("status").textContent = "Signed in to Supabase";
       return true;
     }
 
     async function updateAuthStatus() {
-      if (!client) return;
+      if (!client) return null;
       const sessionResult = await client.auth.getSession();
-      if (!sessionResult.data?.session && window.location.hash) {
-        await restoreSessionFromUrl();
-      }
+      if (!sessionResult.data?.session && window.location.hash) await restoreSessionFromUrl();
       const { data, error } = await client.auth.getUser();
       if (error) {
         $("status").textContent = `Auth check failed: ${error.message}`;
         return null;
       }
       if (data?.user) {
-        $("status").textContent = `Signed in: ${data.user.email || data.user.id} | User ID: ${data.user.id}`;
+        $("status").textContent = `Signed in as ${data.user.email || data.user.id}`;
         return data.user;
       }
-      $("status").textContent = "Configured, not signed in to Supabase";
+      $("status").textContent = "Configured, not signed in";
       return null;
     }
 
@@ -262,110 +473,383 @@
       if (!client) return alert("Configure Supabase first.");
       const email = $("email").value.trim();
       if (!email) return alert("Enter an email address.");
-      const { error } = await client.auth.signInWithOtp({
-        email,
-        options: { emailRedirectTo: window.location.href }
-      });
+      const { error } = await client.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.href } });
       if (error) return alert(error.message);
       $("status").textContent = "Login link sent";
     }
 
-    function renderMetrics(rows, anomalies) {
-      const total = rows.reduce((sum, row) => sum + Number(row.reported_total || 0), 0);
-      const cache = rows.reduce((sum, row) => sum + Number(row.cache_read_input_tokens || 0) + Number(row.cache_creation_input_tokens || 0), 0);
-      const users = new Set(rows.map((row) => row.user_id)).size;
-      const machines = new Set(rows.map((row) => row.machine_id)).size;
-      const cacheShare = total ? cache / total : 0;
-      $("metrics").innerHTML = [
-        ["Total usage", fmt(total), "muted"],
-        ["Cache share", pct(cacheShare), cacheShare > 0.9 ? "bad" : "warn"],
-        ["People", users, "muted"],
-        ["Machines", machines, "muted"],
-        ["Open anomalies", anomalies.length, anomalies.length ? "warn" : "good"],
-      ].map(([label, value, cls]) => `
-        <div class="card">
-          <div class="metric-label">${label}</div>
-          <div class="metric-value ${cls}">${value}</div>
-        </div>
-      `).join("");
+    function table(id, headers, rows) {
+      $(id).innerHTML = `
+        <thead><tr>${headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead>
+        <tbody>${rows.length ? rows.join("") : `<tr><td colspan="${headers.length}" class="subtle">No rows for this window.</td></tr>`}</tbody>
+      `;
     }
 
-    function group(rows, keyFn) {
+    function groupRows(rows, keyFn) {
       const out = new Map();
       for (const row of rows) {
         const key = keyFn(row);
-        const existing = out.get(key) || { key, tokens: 0, requests: 0 };
-        existing.tokens += Number(row.reported_total || 0);
-        existing.requests += Number(row.requests || 0);
-        out.set(key, existing);
+        const item = out.get(key) || { key, rows: [], tokens: 0, requests: 0, cacheTokens: 0 };
+        item.rows.push(row);
+        item.tokens += Number(row.reported_total || 0);
+        item.requests += Number(row.requests || 0);
+        item.cacheTokens += Number(row.cache_tokens || 0);
+        out.set(key, item);
       }
       return [...out.values()].sort((a, b) => b.tokens - a.tokens);
     }
 
-    function table(id, headers, rows) {
-      $(id).innerHTML = `
-        <thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead>
-        <tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join("")}</tr>`).join("")}</tbody>
+    function topBy(rows, keyFn) {
+      const grouped = groupRows(rows, keyFn);
+      return grouped[0] || null;
+    }
+
+    function personRows(projects, models, peopleMeta) {
+      const grouped = groupRows(projects, keyOf);
+      const byKey = new Map(peopleMeta.map((row) => [keyOf(row), row]));
+      const modelByKey = new Map();
+      for (const group of groupRows(models, (row) => `${keyOf(row)}|${row.model_label}`)) {
+        const first = group.rows[0];
+        const key = keyOf(first);
+        const existing = modelByKey.get(key);
+        if (!existing || group.tokens > existing.tokens) modelByKey.set(key, { label: first.model_label, tokens: group.tokens });
+      }
+      return grouped.map((group) => {
+        const first = group.rows[0];
+        const meta = byKey.get(group.key) || first;
+        const topProject = topBy(group.rows, (row) => row.project_name || row.project);
+        const topModel = modelByKey.get(group.key);
+        return {
+          ...meta,
+          key: group.key,
+          person_label: meta.person_label || first.person_label,
+          machine_label: meta.machine_label || first.machine_label,
+          account_display_label: meta.account_display_label || first.account_display_label,
+          reported_total: group.tokens,
+          requests: group.requests,
+          cache_tokens: group.cacheTokens,
+          cache_share: group.tokens ? group.cacheTokens / group.tokens : 0,
+          top_project: topProject ? topProject.key : "No project",
+          top_model: topModel ? topModel.label : "Unknown model",
+          share: 0,
+        };
+      });
+    }
+
+    function metricCards(people, projects, models, anomalies) {
+      const total = people.reduce((sum, row) => sum + Number(row.reported_total || 0), 0);
+      const cache = people.reduce((sum, row) => sum + Number(row.cache_tokens || 0), 0);
+      const stale = people.filter((row) => healthFor(row)[1] === "Stale").length;
+      const topPerson = people[0];
+      const topProject = topBy(projects, (row) => row.project_name || row.project);
+      const topModel = topBy(models, (row) => row.model_label);
+      const items = [
+        ["Total usage", fmt(total), $("windowDays").selectedOptions[0].textContent, "neutral"],
+        ["People", people.length, topPerson ? `${topPerson.person_label} leads` : "No usage", "neutral"],
+        ["Machines", new Set(people.map((row) => row.machine_id)).size, "Reporting collectors", "neutral"],
+        ["Cache share", pct(total ? cache / total : 0), total && cache / total > 0.9 ? "Very high context reuse" : "Normal context reuse", total && cache / total > 0.9 ? "warn" : "good"],
+        ["Stale collectors", stale, stale ? "No sync in 2h+" : "All recent", stale ? "bad" : "good"],
+        ["Open anomalies", anomalies.length, anomalies.length ? "Needs review" : "Clean", anomalies.length ? "warn" : "good"],
+      ];
+      $("metrics").innerHTML = items.map(([label, value, note, status]) => `
+        <div class="metric">
+          <div class="metric-label">${esc(label)}</div>
+          <div class="metric-value ${status === "bad" ? "bad" : status === "warn" ? "warn" : status === "good" ? "good" : ""}">${esc(value)}</div>
+          <div class="metric-note">${esc(note)}</div>
+        </div>
+      `).join("");
+      $("headline").textContent = topProject && topModel
+        ? `Top driver: ${topProject.key} with ${fmt(topProject.tokens)}; top model: ${topModel.key}`
+        : `Attribution, drivers, and collector health for ${$("orgId").value.trim() || DEFAULT_ORG_ID}`;
+    }
+
+    function renderPeople(people, total) {
+      exportRows.people = people.map((row) => ({
+        person: row.person_label,
+        os_user: row.os_username || "",
+        machine: row.machine_label,
+        account: row.account_display_label,
+        tokens: row.reported_total,
+        share: total ? row.reported_total / total : 0,
+        requests: row.requests,
+        top_project: row.top_project,
+        top_model: row.top_model,
+        last_sync: row.last_sync_at || "",
+        health: healthFor(row)[1],
+      }));
+      $("peopleCount").textContent = `${people.length} attributed person-machine ${people.length === 1 ? "record" : "records"}`;
+      table("people", ["Person", "Machine", "Account", "Tokens", "Share", "Requests", "Top project", "Top model", "Last sync", "Health"], people.map((row) => {
+        const [healthClass, healthLabel] = healthFor(row);
+        const selected = row.key === selectedKey ? " selected" : "";
+        return `<tr class="${selected}" data-key="${esc(row.key)}">
+          <td><div class="name">${esc(row.person_label)} <button class="ghost alias" data-type="user" data-id="${esc(row.user_id)}" data-current="${esc(row.person_label)}">Edit</button></div><div class="subtle mono" title="${esc(row.user_id)}">${esc(compactId(row.user_id))}</div></td>
+          <td><div>${esc(row.machine_label)} <button class="ghost alias" data-type="machine" data-id="${esc(row.machine_id)}" data-current="${esc(row.machine_label)}">Edit</button></div><div class="subtle">${esc(row.hostname || "")}</div></td>
+          <td>${esc(row.account_display_label)}</td>
+          <td class="name">${fmt(row.reported_total)}</td>
+          <td><div class="bar"><span style="width:${Math.min(100, Math.max(0, row.share * 100))}%"></span></div><div class="subtle">${pct(row.share)}</div></td>
+          <td>${esc(row.requests)}</td>
+          <td>${esc(row.top_project)}</td>
+          <td>${esc(row.top_model)}</td>
+          <td><span title="${esc(row.last_sync_at || "")}">${esc(timeAgo(row.last_sync_at))}</span></td>
+          <td><span class="badge ${healthClass}">${healthLabel}</span></td>
+        </tr>`;
+      }));
+      document.querySelectorAll("#people tbody tr[data-key]").forEach((tr) => {
+        tr.addEventListener("click", (event) => {
+          if (event.target.closest("button")) return;
+          selectedKey = tr.dataset.key;
+          renderCurrent();
+        });
+      });
+      document.querySelectorAll("button.alias").forEach((button) => {
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          openAlias(button.dataset.type, button.dataset.id, button.dataset.current);
+        });
+      });
+    }
+
+    function renderProjects(projects, total) {
+      const rows = groupRows(projects.filter((row) => sameIdentity(row, selectedKey)), (row) => `${row.person_label}|${row.machine_label}|${row.project_name || row.project}`)
+        .slice(0, 40)
+        .map((group) => {
+          const first = group.rows[0];
+          return {
+            person: first.person_label,
+            machine: first.machine_label,
+            project: first.project_name || first.project,
+            tokens: group.tokens,
+            share: total ? group.tokens / total : 0,
+            requests: group.requests,
+            cache_share: group.tokens ? group.cacheTokens / group.tokens : 0,
+          };
+        });
+      exportRows.projects = rows;
+      table("projects", ["Person", "Machine", "Project", "Tokens", "Share", "Requests", "Cache"], rows.map((row) => `
+        <tr>
+          <td>${esc(row.person)}</td>
+          <td>${esc(row.machine)}</td>
+          <td class="name">${esc(row.project)}</td>
+          <td>${fmt(row.tokens)}</td>
+          <td>${pct(row.share)}</td>
+          <td>${esc(row.requests)}</td>
+          <td>${pct(row.cache_share)}</td>
+        </tr>
+      `));
+    }
+
+    function renderModels(models, total) {
+      const rows = groupRows(models.filter((row) => sameIdentity(row, selectedKey)), (row) => `${row.person_label}|${row.machine_label}|${row.model_label}`)
+        .slice(0, 40)
+        .map((group) => {
+          const first = group.rows[0];
+          return {
+            person: first.person_label,
+            machine: first.machine_label,
+            model: first.model_label,
+            tokens: group.tokens,
+            share: total ? group.tokens / total : 0,
+            requests: group.requests,
+            cache_share: group.tokens ? group.cacheTokens / group.tokens : 0,
+          };
+        });
+      exportRows.models = rows;
+      table("models", ["Person", "Machine", "Model", "Tokens", "Share", "Requests", "Cache"], rows.map((row) => `
+        <tr>
+          <td>${esc(row.person)}</td>
+          <td>${esc(row.machine)}</td>
+          <td class="name">${esc(row.model)}</td>
+          <td>${fmt(row.tokens)}</td>
+          <td>${pct(row.share)}</td>
+          <td>${esc(row.requests)}</td>
+          <td>${pct(row.cache_share)}</td>
+        </tr>
+      `));
+    }
+
+    function renderSessions(sessions, total) {
+      const filtered = sessions.filter((row) => sameIdentity(row, selectedKey)).slice(0, 25);
+      table("sessions", ["Person", "Project", "Session", "Tokens", "Share", "Requests", "Rate", "Last activity"], filtered.map((row) => `
+        <tr>
+          <td>${esc(row.person_label)}<div class="subtle">${esc(row.machine_label)}</div></td>
+          <td>${esc(row.project_name || row.project)}</td>
+          <td><span class="mono" title="${esc(row.session_id)}">${esc(compactId(row.session_id))}</span>${row.is_subagent ? ' <span class="badge neutral">Subagent</span>' : ""}</td>
+          <td class="name">${fmt(row.reported_total)}</td>
+          <td>${pct(total ? Number(row.reported_total || 0) / total : 0)}</td>
+          <td>${esc(row.requests || 0)}</td>
+          <td>${fmt(row.tokens_per_hour || 0)}/h</td>
+          <td>${esc(timeAgo(row.last_ts))}</td>
+        </tr>
+      `));
+    }
+
+    function renderAnomalies(anomalies) {
+      const filtered = anomalies.filter((row) => sameIdentity(row, selectedKey));
+      $("anomalyCount").textContent = `${filtered.length} open`;
+      table("anomalies", ["Status", "Person", "Machine", "Message", "Last seen"], filtered.map((row) => {
+        const cls = row.severity === "bad" || row.severity === "high" ? "bad" : "warn";
+        return `<tr>
+          <td><span class="badge ${cls}">${esc(row.severity || "warn")}</span></td>
+          <td>${esc(row.person_label)}</td>
+          <td>${esc(row.machine_label)}</td>
+          <td>${esc(row.message)}</td>
+          <td>${esc(timeAgo(row.last_seen_at))}</td>
+        </tr>`;
+      }));
+    }
+
+    function renderDrivers(people, projects, models, sessions) {
+      const scopedPeople = people.filter((row) => !selectedKey || row.key === selectedKey);
+      const scopedProjects = projects.filter((row) => sameIdentity(row, selectedKey));
+      const scopedModels = models.filter((row) => sameIdentity(row, selectedKey));
+      const scopedSessions = sessions.filter((row) => sameIdentity(row, selectedKey));
+      const total = scopedPeople.reduce((sum, row) => sum + Number(row.reported_total || 0), 0);
+      const topPerson = scopedPeople[0];
+      const topProject = topBy(scopedProjects, (row) => row.project_name || row.project);
+      const topModel = topBy(scopedModels, (row) => row.model_label);
+      const topSession = scopedSessions[0];
+      const items = [];
+      if (!selectedKey && topPerson) items.push(["Top person", topPerson.person_label, topPerson.reported_total, topPerson.reported_total / total]);
+      if (topProject) items.push(["Top project", topProject.key, topProject.tokens, total ? topProject.tokens / total : 0]);
+      if (topModel) items.push(["Top model", topModel.key, topModel.tokens, total ? topModel.tokens / total : 0]);
+      if (topSession) items.push(["Top session", `${topSession.project_name} / ${compactId(topSession.session_id)}`, Number(topSession.reported_total || 0), total ? Number(topSession.reported_total || 0) / total : 0]);
+      $("driverScope").textContent = selectedKey && scopedPeople[0] ? scopedPeople[0].person_label : "Team";
+      $("drivers").innerHTML = items.length ? items.map(([label, name, tokens, share]) => {
+        const cls = share > 0.7 ? "bad" : share > 0.45 ? "warn" : "neutral";
+        return `<div class="driver">
+          <span class="badge ${cls}">${esc(label)}</span>
+          <div><div class="name">${esc(name)}</div><div class="subtle">${share > 0.7 ? "Concentrated usage; worth reviewing." : share > 0.45 ? "Material usage driver." : "Normal contributor."}</div></div>
+          <div class="name">${fmt(tokens)}<div class="subtle">${pct(share)}</div></div>
+        </div>`;
+      }).join("") : `<div class="empty">No usage drivers for this window.</div>`;
+    }
+
+    function renderDetail(people) {
+      const selected = people.find((row) => row.key === selectedKey);
+      if (!selected) {
+        $("selectedScope").textContent = "Team view";
+        $("personDetail").className = "empty";
+        $("personDetail").innerHTML = "Select a person to inspect their projects, models, machine, and collector health.";
+        return;
+      }
+      const [healthClass, healthLabel] = healthFor(selected);
+      $("selectedScope").textContent = selected.person_label;
+      $("personDetail").className = "";
+      $("personDetail").innerHTML = `
+        <div class="driver-list">
+          <div><div class="name">${esc(selected.person_label)}</div><div class="subtle">OS user: ${esc(selected.os_username || "unknown")}</div></div>
+          <div><span class="badge ${healthClass}">${healthLabel}</span> <span class="badge neutral">${esc(selected.collector_version || "unknown version")}</span></div>
+          <div class="driver"><span class="subtle">Machine</span><span>${esc(selected.machine_label)}</span><span class="mono" title="${esc(selected.machine_id)}">${esc(compactId(selected.machine_id))}</span></div>
+          <div class="driver"><span class="subtle">Account</span><span>${esc(selected.account_display_label)}</span><span></span></div>
+          <div class="driver"><span class="subtle">Usage</span><span>${fmt(selected.reported_total)} tokens</span><span>${esc(selected.requests)} req</span></div>
+          <div class="driver"><span class="subtle">Cache</span><span>${pct(selected.cache_share)}</span><span>${fmt(selected.cache_tokens)}</span></div>
+          <div class="driver"><span class="subtle">Last sync</span><span>${esc(timeAgo(selected.last_sync_at))}</span><span></span></div>
+        </div>
       `;
+    }
+
+    let currentData = { peopleMeta: [], projects: [], models: [], sessions: [], anomalies: [] };
+
+    function renderCurrent() {
+      const people = personRows(currentData.projects, currentData.models, currentData.peopleMeta);
+      const total = people.reduce((sum, row) => sum + Number(row.reported_total || 0), 0);
+      for (const row of people) row.share = total ? Number(row.reported_total || 0) / total : 0;
+      people.sort((a, b) => b.reported_total - a.reported_total);
+      metricCards(people, currentData.projects, currentData.models, currentData.anomalies);
+      renderPeople(people, total);
+      const scopedTotal = selectedKey
+        ? people.filter((row) => row.key === selectedKey).reduce((sum, row) => sum + Number(row.reported_total || 0), 0)
+        : total;
+      renderProjects(currentData.projects, scopedTotal);
+      renderModels(currentData.models, scopedTotal);
+      renderSessions(currentData.sessions, scopedTotal);
+      renderAnomalies(currentData.anomalies);
+      renderDrivers(people, currentData.projects, currentData.models, currentData.sessions);
+      renderDetail(people);
+    }
+
+    async function fetchView(name, options = {}) {
+      let query = client.from(name).select("*").eq("org_id", $("orgId").value.trim());
+      if (options.dayColumn && cutoffDay()) query = query.gte(options.dayColumn, cutoffDay());
+      if (options.order) query = query.order(options.order, { ascending: false });
+      if (options.limit) query = query.limit(options.limit);
+      const { data, error } = await query;
+      if (error) throw error;
+      return data || [];
     }
 
     async function refresh() {
       saveSettings();
       if (!client) return alert("Configure Supabase first.");
-      const orgId = $("orgId").value.trim();
-      if (!orgId) return alert("Enter an Org ID.");
       const user = await updateAuthStatus();
-      if (!user) {
-        renderMetrics([], []);
-        table("users", ["User", "Machine", "Tokens", "Share", "Requests"], []);
-        table("projects", ["Project", "Tokens", "Share", "Requests"], []);
-        table("models", ["Model", "Tokens", "Share", "Requests"], []);
-        table("anomalies", ["Severity", "Message", "Last seen"], []);
-        return alert("Sign in to Supabase first. Use your real email, click Send login link, then open the email link.");
+      if (!user) return alert("Sign in to Supabase first.");
+      $("status").textContent = "Loading analytics...";
+      try {
+        const [peopleMeta, projects, models, sessions, anomalies] = await Promise.all([
+          fetchView("dashboard_people_usage", { order: "reported_total", limit: 1000 }),
+          fetchView("dashboard_user_project_usage", { dayColumn: "day", order: "reported_total", limit: 10000 }),
+          fetchView("dashboard_user_model_usage", { dayColumn: "day", order: "reported_total", limit: 10000 }),
+          fetchView("dashboard_sessions", { dayColumn: "last_ts", order: "reported_total", limit: 1000 }),
+          fetchView("dashboard_anomalies", { order: "last_seen_at", limit: 500 }),
+        ]);
+        currentData = { peopleMeta, projects, models, sessions, anomalies };
+        if (selectedKey && !projects.some((row) => keyOf(row) === selectedKey)) selectedKey = null;
+        renderCurrent();
+        $("status").textContent = `Loaded ${projects.length} project rows, ${models.length} model rows`;
+      } catch (error) {
+        $("status").textContent = `Load failed: ${error.message}`;
+        alert(error.message);
       }
+    }
 
-      $("status").textContent = "Loading...";
-      const { data: usage, error: usageError } = await client
-        .from("usage_daily")
-        .select("*")
-        .eq("org_id", orgId)
-        .order("day", { ascending: false })
-        .limit(5000);
-      if (usageError) return alert(usageError.message);
+    function openAlias(entityType, entityId, current) {
+      aliasTarget = { entityType, entityId };
+      $("aliasTitle").textContent = `Edit ${entityType} alias`;
+      $("aliasMeta").textContent = entityId;
+      $("aliasName").value = current || "";
+      $("aliasDialog").showModal();
+      setTimeout(() => $("aliasName").focus(), 20);
+    }
 
-      const { data: anomalyRows, error: anomalyError } = await client
-        .from("usage_anomalies")
-        .select("*")
-        .eq("org_id", orgId)
-        .order("last_seen_at", { ascending: false })
-        .limit(100);
-      if (anomalyError) return alert(anomalyError.message);
+    async function saveAlias(event) {
+      event.preventDefault();
+      if (!aliasTarget || !client) return;
+      const orgId = $("orgId").value.trim();
+      const displayName = $("aliasName").value.trim();
+      const table = client.from("identity_aliases");
+      const result = displayName
+        ? await table.upsert({ org_id: orgId, entity_type: aliasTarget.entityType, entity_id: aliasTarget.entityId, display_name: displayName, updated_at: new Date().toISOString() })
+        : await table.delete().eq("org_id", orgId).eq("entity_type", aliasTarget.entityType).eq("entity_id", aliasTarget.entityId);
+      if (result.error) return alert(result.error.message);
+      $("aliasDialog").close();
+      await refresh();
+    }
 
-      const rows = usage || [];
-      const anomalies = anomalyRows || [];
-      const total = rows.reduce((sum, row) => sum + Number(row.reported_total || 0), 0);
-      renderMetrics(rows, anomalies);
-      table("users", ["User", "Machine", "Tokens", "Share", "Requests"], group(rows, (r) => `${r.user_id}|${r.machine_id}`).slice(0, 20).map((r) => {
-        const [user, machine] = r.key.split("|");
-        return [`<span class="pill">${user.slice(0, 10)}</span>`, machine.slice(0, 10), fmt(r.tokens), total ? pct(r.tokens / total) : "0.0%", r.requests];
-      }));
-      table("projects", ["Project", "Tokens", "Share", "Requests"], group(rows, (r) => r.project_name || r.project).slice(0, 20).map((r) => [
-        r.key, fmt(r.tokens), total ? pct(r.tokens / total) : "0.0%", r.requests
-      ]));
-      table("models", ["Model", "Tokens", "Share", "Requests"], group(rows, (r) => r.model).slice(0, 20).map((r) => [
-        r.key, fmt(r.tokens), total ? pct(r.tokens / total) : "0.0%", r.requests
-      ]));
-      table("anomalies", ["Severity", "Message", "Last seen"], anomalies.map((r) => [
-        `<span class="${r.severity === "bad" ? "bad" : "warn"}">${r.severity}</span>`,
-        r.message,
-        new Date(r.last_seen_at).toLocaleString(),
-      ]));
-      $("status").textContent = `Loaded ${rows.length} rows`;
+    function exportCsv(name, rows) {
+      if (!rows.length) return alert("No rows to export.");
+      const headers = Object.keys(rows[0]);
+      const csv = [
+        headers.join(","),
+        ...rows.map((row) => headers.map((key) => `"${String(row[key] ?? "").replaceAll('"', '""')}"`).join(",")),
+      ].join("\n");
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${name}-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
     }
 
     $("save").addEventListener("click", saveSettings);
     $("login").addEventListener("click", login);
     $("refresh").addEventListener("click", refresh);
+    $("windowDays").addEventListener("change", refresh);
+    $("clearSelection").addEventListener("click", () => { selectedKey = null; renderCurrent(); });
+    $("aliasSave").addEventListener("click", saveAlias);
+    $("exportPeople").addEventListener("click", () => exportCsv("claude-usage-people", exportRows.people));
+    $("exportProjects").addEventListener("click", () => exportCsv("claude-usage-projects", exportRows.projects));
+    $("exportModels").addEventListener("click", () => exportCsv("claude-usage-models", exportRows.models));
     loadSettings();
   </script>
 </body>
