@@ -145,7 +145,7 @@ The dashboard opens on three views of the same question, who is using the most a
 - **Share** — a proportional field of people, projects, or models.
 - **Work lanes** — the last 7 days of sessions per person (length is time, height is tokens).
 
-Data pages (People, Projects & models, Sessions, Collectors) and a person panel sit alongside. "Why" reasons are derived in the page from session length, subagent share, context reuse, model mix, and top tools (`dashboard_person_tools`). All views are paged, so none is capped at PostgREST's row limit.
+Data pages (People, Projects & models, Sessions, Collectors) and a person panel sit alongside. "Why" reasons are derived in the page from session length, subagent share, context reuse, model mix, and top tools (`dashboard_person_tools`). Collectors come from each identity's latest sync (`dashboard_collectors`), so a machine that syncs but finds no Claude data still appears. All views are paged, so none is capped at PostgREST's row limit.
 
 The dashboard asks for:
 

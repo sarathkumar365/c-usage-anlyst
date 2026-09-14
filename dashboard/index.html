@@ -432,7 +432,7 @@
       state.loading = true; state.error = null; render();
       try {
         const identity = ["collector_id", "machine_id", "user_id", "account_label"];
-        const [people, projects, models, sessions, anomalies, sources, tools] = await Promise.all([
+        const [people, projects, models, sessions, anomalies, sources, tools, collectors] = await Promise.all([
           fetchAll("dashboard_people_usage", identity),
           fetchAll("dashboard_user_project_usage", ["day", ...identity, "surface", "confidence", "project"], (q) => (since ? q.gte("day", since) : q)),
           fetchAll("dashboard_user_model_usage", ["day", ...identity, "surface", "confidence", "model_label"], (q) => (since ? q.gte("day", since) : q)),
@@ -440,8 +440,9 @@
           fetchAll("dashboard_anomalies", ["collector_id", "machine_id", "user_id", "code"]),
           fetchAll("dashboard_sources", [...identity, "source_id"]),
           fetchAll("dashboard_person_tools", [...identity, "tool"]),
+          fetchAll("dashboard_collectors", identity),
         ]);
-        state.raw = { people, projects, models, sessions, anomalies, sources, tools };
+        state.raw = { people, projects, models, sessions, anomalies, sources, tools, collectors };
         state.loadedAt = new Date();
       } catch (error) {
         state.error = error.message;
@@ -488,7 +489,7 @@
             key, user_id: row.user_id, machine_id: row.machine_id, collector_id: row.collector_id, account_label: row.account_label || "",
             name: row.person_label || String(row.user_id).slice(0, 10), fallbackName: row.os_username || String(row.user_id).slice(0, 10),
             machine: row.machine_label || row.hostname || String(row.machine_id).slice(0, 10), account: row.account_display_label || "",
-            meta: null, tokens: 0, prevTokens: 0, requests: 0, cache: 0,
+            meta: null, collector: null, tokens: 0, prevTokens: 0, requests: 0, cache: 0,
             projects: new Map(), models: new Map(), days: new Map(), sessions: [], allSessions: [], tools: [], anomalies: [], surfaces: new Set(),
           });
         }
@@ -496,6 +497,7 @@
       };
 
       for (const row of raw.people) { const p = ensure(row); p.meta = row; p.name = row.person_label || p.name; p.fallbackName = row.os_username || p.fallbackName; }
+      for (const row of raw.collectors || []) ensure(row).collector = row;
       const teamProjects = new Map();
       let firstDay = null;
       for (const row of raw.projects) {
@@ -538,13 +540,16 @@
 
       const people = [...byKey.values()];
       for (const p of people) {
-        const lastSync = p.meta?.last_sync_at ? new Date(p.meta.last_sync_at).getTime() : 0;
-        p.lastSync = p.meta?.last_sync_at || null;
-        p.version = p.meta?.collector_version || "";
-        p.platform = p.meta?.platform || {};
-        p.stale = Boolean(p.meta) && (!lastSync || Date.now() - lastSync > STALE_MS);
+        const sync = p.collector || p.meta;
+        const lastSync = sync?.last_sync_at ? new Date(sync.last_sync_at).getTime() : 0;
+        p.lastSync = sync?.last_sync_at || null;
+        p.version = sync?.collector_version || "";
+        p.platform = sync?.platform || {};
+        p.stale = Boolean(sync) && (!lastSync || Date.now() - lastSync > STALE_MS);
         p.warn = p.anomalies.some((a) => a.severity === "warn" || a.severity === "bad");
-        p.status = p.stale ? { label: "Stale", color: "var(--bad)" } : p.warn ? { label: "Check setup", color: "var(--warn)" } : { label: "Healthy", color: "var(--good)" };
+        // A collector that syncs but has never sent usage (e.g. no Claude Code on that machine) is not healthy.
+        p.noData = !p.meta && Boolean(p.collector);
+        p.status = p.stale ? { label: "Stale", color: "var(--bad)" } : p.noData ? { label: "No data found", color: "var(--warn)" } : p.warn ? { label: "Check setup", color: "var(--warn)" } : { label: "Healthy", color: "var(--good)" };
       }
 
       const total = people.reduce((acc, p) => acc + p.tokens, 0);
@@ -758,7 +763,7 @@
           <span class="mono" style="text-align:right;font-size:13px;">${pct1(p.share)}</span>
         </button>`).join("");
 
-      const stale = ranked.find((p) => p.stale) || model.people.find((p) => p.stale);
+      const stale = ranked.find((p) => p.stale) || model.people.find((p) => p.stale && p.meta);
       const storyPeople = [ranked[1], ranked[2]].filter(Boolean);
       if (stale && !storyPeople.includes(stale)) storyPeople.push(stale); else if (ranked[3]) storyPeople.push(ranked[3]);
       const stories = storyPeople.slice(0, 3).map((p) => renderStory(p, p === stale && p.stale)).join("");
@@ -1110,7 +1115,7 @@
     }
 
     function renderCollectors() {
-      const collectors = model.people.filter((p) => p.meta || p.surfaces.size);
+      const collectors = model.people.filter((p) => p.meta || p.collector || p.surfaces.size);
       const surfaceCount = (surface) => collectors.filter((p) => p.surfaces.has(surface)).length;
       const stats = [
         ["Claude Code", surfaceCount("claude_code"), "exact token counts"],
@@ -1132,7 +1137,7 @@
               <span class="mono" style="font-size:12px;color:var(--ink-3);">${esc(p.version || "—")}</span>
               <span style="font-size:13px;color:var(--ink-3);">${esc(timeAgo(p.lastSync))}</span>
               <span class="ellipsis" style="font-size:12px;color:var(--ink-3);">${esc(surfaceList(p.surfaces) || "—")}</span>
-              ${p.meta ? statusBadge(p) : `<span class="muted" style="font-size:12px;">No usage synced</span>`}
+              ${p.meta || p.collector ? statusBadge(p) : `<span class="muted" style="font-size:12px;">No usage synced</span>`}
             </div>`).join("")}
         </section>
         <section class="panel" style="padding:18px 20px 6px;">
@@ -1181,7 +1186,7 @@
               </div>
               <button class="btn icon" style="border:0;background:none;" data-action="close-person" aria-label="Close">${icon("M4 4l8 8M12 4l-8 8", 14)}</button>
             </div>
-            ${p.meta ? `<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-3);">${statusBadge(p)}<span>· synced ${esc(timeAgo(p.lastSync))} · agent ${esc(p.version || "unknown")}</span></div>` : ""}
+            ${p.meta || p.collector ? `<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-3);">${statusBadge(p)}<span>· synced ${esc(timeAgo(p.lastSync))} · agent ${esc(p.version || "unknown")}</span></div>` : ""}
           </div>
           <div class="drawer-why">
             <span class="muted" style="font-size:12px;">Why usage is ${p.share >= 0.2 ? "high" : "what it is"}</span>

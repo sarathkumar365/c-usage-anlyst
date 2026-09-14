@@ -664,6 +664,36 @@ from (
 ) r
 cross join lateral jsonb_to_recordset(coalesce(r.payload -> 'drivers' -> 'top_tools', '[]'::jsonb)) as t(tool text, calls bigint);
 
+-- One row per collector identity from its latest sync, so collectors that sync but find no usage still show up.
+create or replace view dashboard_collectors
+with (security_invoker = true)
+as
+select
+  r.org_id,
+  r.collector_id,
+  r.machine_id,
+  r.user_id,
+  r.account_label,
+  display_person(r.org_id, r.user_id, r.machine_id) as person_label,
+  display_machine(r.org_id, r.machine_id) as machine_label,
+  mu.os_username,
+  m.hostname,
+  m.platform,
+  r.collector_version,
+  r.received_at as last_sync_at,
+  coalesce((r.summary ->> 'requests')::bigint, 0) as last_requests,
+  coalesce((r.summary ->> 'transcript_files')::bigint, 0) as last_transcript_files
+from (
+  select distinct on (org_id, collector_id, machine_id, user_id, account_label)
+    org_id, collector_id, machine_id, user_id, account_label, collector_version, received_at, summary
+  from collector_runs
+  order by org_id, collector_id, machine_id, user_id, account_label, received_at desc
+) r
+left join machine_users mu
+  on mu.org_id = r.org_id and mu.user_id = r.user_id and mu.machine_id = r.machine_id
+left join machines m
+  on m.org_id = r.org_id and m.machine_id = r.machine_id;
+
 -- ============================================================================
 -- Grants
 -- ============================================================================
@@ -678,6 +708,7 @@ revoke all on dashboard_anomalies from anon, authenticated;
 revoke all on dashboard_sources from anon, authenticated;
 revoke all on dashboard_activity_daily from anon, authenticated;
 revoke all on dashboard_person_tools from anon, authenticated;
+revoke all on dashboard_collectors from anon, authenticated;
 
 grant select, insert, update, delete on identity_aliases to authenticated;
 grant select on dashboard_people_usage to authenticated;
@@ -688,6 +719,7 @@ grant select on dashboard_anomalies to authenticated;
 grant select on dashboard_sources to authenticated;
 grant select on dashboard_activity_daily to authenticated;
 grant select on dashboard_person_tools to authenticated;
+grant select on dashboard_collectors to authenticated;
 
 -- ============================================================================
 -- Admin functions (service role only)
