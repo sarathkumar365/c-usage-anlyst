@@ -390,7 +390,9 @@
       if (!email) { state.signin.error = "Enter your work email."; return render(); }
       store.set("email", email);
       state.signin.sending = true; state.signin.error = null; render();
-      const { error } = await client.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.origin + window.location.pathname } });
+      // Supabase matches redirect URLs exactly, and allowlist entries are usually written without a trailing slash.
+      const redirect = window.location.origin + (window.location.pathname === "/" ? "" : window.location.pathname);
+      const { error } = await client.auth.signInWithOtp({ email, options: { emailRedirectTo: redirect } });
       state.signin.sending = false;
       if (error) state.signin.error = error.message; else state.signin.sent = true;
       render();
