@@ -32,7 +32,13 @@ type UsagePayload = {
   anomalies: Array<{ code: string; severity: string; message: string }>;
 };
 
-type TokenRow = { org_id: string; collector_id: string | null; revoked_at: string | null };
+type TokenRow = {
+  org_id: string;
+  collector_id: string | null;
+  machine_id: string | null;
+  user_id: string | null;
+  revoked_at: string | null;
+};
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -66,7 +72,7 @@ async function authenticate(req: Request, supabase: SupabaseClient): Promise<{ t
   const tokenHash = await sha256Hex(token);
   const { data: tokenRow, error } = await supabase
     .from("collector_tokens")
-    .select("org_id, collector_id, revoked_at")
+    .select("org_id, collector_id, machine_id, user_id, revoked_at")
     .eq("token_hash", tokenHash)
     .maybeSingle();
   check(error);
@@ -88,6 +94,12 @@ async function parsePayload(req: Request, tokenRow: TokenRow): Promise<UsagePayl
   // token from overwriting another collector's rows. Legacy tokens have no collector_id.
   if (tokenRow.collector_id && tokenRow.collector_id !== payload.identity.collector_id) {
     throw new HttpError(403, "token does not belong to this collector");
+  }
+  // Collectors before 0.6.1 re-derive machine_id from network names that change with the IP address,
+  // so the IDs recorded at enrollment are authoritative; otherwise one machine splits into many.
+  if (tokenRow.machine_id && tokenRow.user_id) {
+    payload.identity.machine_id = tokenRow.machine_id;
+    payload.identity.user_id = tokenRow.user_id;
   }
   if (!payload.idempotency_key) throw new HttpError(400, "missing idempotency key");
   return payload;

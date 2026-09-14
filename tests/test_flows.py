@@ -144,6 +144,15 @@ class CliTests(FixtureCase):
         self.assertEqual(report.returncode, 0, report.stderr)
         self.assertIn("TOTAL REPORTED TOKEN VOLUME", report.stdout)
 
+    def test_stored_ids_survive_network_name_changes(self):
+        self.cli("--register", "--ingest-url", "https://example.invalid/i", "--collector-token", "tok")
+        config = json.loads((self.root / "agent" / "config.json").read_text())
+        self.assertTrue(config["machine_id"] and config["user_id"])
+        with mock.patch("socket.gethostname", return_value="Mac"), mock.patch("socket.getfqdn", return_value="38.2.168.192.in-addr.arpa"):
+            from claude_usage.identity import collect_identity
+            identity = collect_identity(config)
+        self.assertEqual((identity["machine_id"], identity["user_id"]), (config["machine_id"], config["user_id"]))
+
 
 if __name__ == "__main__":
     unittest.main()

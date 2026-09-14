@@ -14,7 +14,7 @@ from claude_usage.flows.discover import discover_for_sync, run_discovery
 from claude_usage.identity import collect_identity
 from claude_usage.paths import ClaudePaths
 from claude_usage.payload import build_sync_payload
-from claude_usage.store import load_config, redact_config, update_state
+from claude_usage.store import load_config, redact_config, save_config, update_state
 from claude_usage.transcripts import transcript_digest
 from claude_usage.transport import post_json
 from claude_usage.ui import c
@@ -88,6 +88,10 @@ def run_sync(claude: ClaudePaths, query: UsageQuery, *, dry_run: bool = False) -
         })
         print(c(str(exc), "red"))
         return 2
+
+    if not config.get("machine_id") or not config.get("user_id"):
+        # Installs enrolled before IDs were stored: pin the IDs this upload used.
+        save_config({**load_config(), "machine_id": payload["identity"]["machine_id"], "user_id": payload["identity"]["user_id"]})
 
     update_state({
         "last_attempt_at": started_at,

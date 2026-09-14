@@ -49,8 +49,10 @@ def collect_identity(config: dict[str, Any] | None = None) -> dict[str, Any]:
         "machine_hint": machine_hint,
         "mac_node": uuid.getnode(),
     }
-    machine_id = stable_hash(raw_fingerprint)[:32]
-    user_id = stable_hash({
+    # The fingerprint includes network names that change with the IP address (macOS reverse DNS),
+    # so once an ID is stored in config it wins; otherwise every new network looks like a new machine.
+    machine_id = config.get("machine_id") or stable_hash(raw_fingerprint)[:32]
+    user_id = config.get("user_id") or stable_hash({
         "machine_id": machine_id,
         "os_username": os_username,
         "home": str(Path.home()),

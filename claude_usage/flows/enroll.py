@@ -47,10 +47,13 @@ def register(
 ):
     existing = load_config()
     now = datetime.now(timezone.utc).isoformat()
+    identity = collect_identity(existing)
     _save({
         **existing,
         "schema_version": 1,
         "collector_id": existing.get("collector_id") or new_collector_id(),
+        "machine_id": identity["machine_id"],
+        "user_id": identity["user_id"],
         "ingest_url": ingest_url,
         "collector_token": collector_token,
         **_labels(existing, org_id, account_label, collector_label),
@@ -95,6 +98,8 @@ def enroll(
         **existing,
         "schema_version": 1,
         "collector_id": collector_id,
+        "machine_id": identity["machine_id"],
+        "user_id": identity["user_id"],
         "enroll_url": enroll_url,
         "ingest_url": ingest_url,
         "collector_token": collector_token,

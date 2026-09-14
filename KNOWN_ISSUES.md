@@ -4,7 +4,7 @@ Findings from a code review on 2026-09-14 (working tree based on `b31a8ea` plus 
 
 Status values: `open`, `in-progress`, `fixed`, `deferred`, `wontfix`, `unverified`.
 
-`deferred` = accepted while in development; revisit before onboarding real users. KI-06/07/08/15 skew dashboard totals upward — check them first if numbers look high.
+`deferred` = accepted while in development; revisit before onboarding real users. KI-07/08/15 skew dashboard totals upward — check them first if numbers look high.
 
 | ID | Severity | Area | Title | Status |
 |----|----------|------|-------|--------|
@@ -13,7 +13,7 @@ Status values: `open`, `in-progress`, `fixed`, `deferred`, `wontfix`, `unverifie
 | KI-03 | High | Security | `create_collector_token` likely callable by anon | fixed |
 | KI-04 | High | Data integrity | Idempotency key never repeats; `collector_runs` grows unbounded | fixed |
 | KI-05 | High | Data integrity | Partial ingest failure permanently drops data | fixed |
-| KI-06 | High | Data integrity | Hostname change forks machine/user IDs and double-counts | deferred |
+| KI-06 | High | Data integrity | Hostname change forks machine/user IDs and double-counts | fixed |
 | KI-07 | Medium | Data integrity | Activity rows accumulate across days | deferred |
 | KI-08 | Medium | Discovery | False-positive sources from generic metadata names | deferred |
 | KI-09 | High | Release | Untracked `claude_usage/` package breaks builds and Python fallback | fixed |
@@ -73,6 +73,11 @@ Status values: `open`, `in-progress`, `fixed`, `deferred`, `wontfix`, `unverifie
 - **Problem:** `machine_id` hashes `hostname`, `fqdn`, `node`, etc.; `user_id` derives from `machine_id`. macOS hostnames often change across networks.
 - **Impact:** A new identity re-uploads the same 90 days of usage. Dashboard sums across identities double-count; attribution splits.
 - **Fix direction:** Generate and persist a stable random `machine_id` / `user_id` in `config.json` at enrollment; use the fingerprint only as a secondary hint.
+- **Seen live (2026-09-14):** on macOS `fqdn` is the reverse DNS of the DHCP address (`38.2.168.192.in-addr.arpa`), so cdhameja's Mac produced 7 machine IDs and gurpr's Windows PC a new one each day. cdhameja's usage for 2026-09-14 was stored 5 times (172.6M summed vs 40.0M real).
+- **Fixed (v0.6.1):**
+  - `ingest` replaces the payload's `machine_id` / `user_id` with the ones recorded on the enrolled token, which fixes existing installs without a reinstall.
+  - The collector stores both IDs in `config.json` at enroll/register (or after the first successful sync for older configs) and reuses them. This covers legacy tokens that have no recorded IDs.
+  - Live data was merged onto the token IDs, keeping the newest copy of each overlapping row. Pre-merge copies are in schema `backup_20260914`; drop it once the dashboard looks right.
 
 ## KI-07 — Activity rows accumulate across days
 

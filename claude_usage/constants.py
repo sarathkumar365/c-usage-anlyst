@@ -1,4 +1,4 @@
-APP_VERSION = "0.6.0"
+APP_VERSION = "0.6.1"
 DEFAULT_SYNC_INTERVAL_MINUTES = 30
 DEFAULT_ENROLL_URL = "https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/enroll"
 DEFAULT_INGEST_URL = "https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/ingest"
