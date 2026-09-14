@@ -46,9 +46,9 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_argument("--sync", action="store_true",
                           help="Upload metrics-only usage payload to the configured ingest endpoint.")
     commands.add_argument("--install-statusline", action="store_true",
-                          help="Capture the account's usage % from Claude Code's statusline (keeps any existing statusline).")
+                          help="Capture the account's usage %% from Claude Code's statusline (keeps any existing statusline).")
     commands.add_argument("--uninstall-statusline", action="store_true",
-                          help="Remove the usage % capture and restore the previous statusline.")
+                          help="Remove the usage %% capture and restore the previous statusline.")
 
     filters = parser.add_argument_group("filters (reports and --sync)")
     filters.add_argument("--days", type=int, default=None, help="Only analyze the last N days.")

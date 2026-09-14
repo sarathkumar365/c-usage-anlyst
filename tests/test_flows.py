@@ -256,6 +256,11 @@ class CliTests(FixtureCase):
         state = json.loads((self.root / "agent" / "state.json").read_text())
         self.assertIn("not registered", state["last_error"])
 
+    def test_help_renders(self):
+        proc = self.cli("--help")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("--install-statusline", proc.stdout)
+
     def test_enroll_without_secret_fails_cleanly(self):
         proc = self.cli("--enroll")
         self.assertEqual(proc.returncode, 2)
