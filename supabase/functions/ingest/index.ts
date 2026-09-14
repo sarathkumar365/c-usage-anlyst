@@ -24,6 +24,8 @@ type UsagePayload = {
   summary: Record<string, unknown>;
   daily: Array<Record<string, unknown>>;
   sessions: Array<Record<string, unknown>>;
+  sources?: Array<Record<string, unknown>>;
+  activity_daily?: Array<Record<string, unknown>>;
   anomalies: Array<{ code: string; severity: string; message: string }>;
 };
 
@@ -67,7 +69,7 @@ Deno.serve(async (req) => {
   const tokenHash = await sha256Hex(token);
   const { data: tokenRow, error: tokenError } = await supabase
     .from("collector_tokens")
-    .select("org_id, revoked_at")
+    .select("org_id, collector_id, revoked_at")
     .eq("token_hash", tokenHash)
     .maybeSingle();
 
@@ -78,9 +80,19 @@ Deno.serve(async (req) => {
     return new Response("invalid collector token", { status: 403, headers: corsHeaders });
   }
 
-  const payload = (await req.json()) as UsagePayload;
+  let payload: UsagePayload;
+  try {
+    payload = (await req.json()) as UsagePayload;
+  } catch {
+    return new Response("invalid json", { status: 400, headers: corsHeaders });
+  }
   if (!payload?.identity?.collector_id || !payload?.identity?.machine_id || !payload?.identity?.user_id) {
     return new Response("invalid payload identity", { status: 400, headers: corsHeaders });
+  }
+  // Every usage table keys on collector_id, so binding it to the token stops one
+  // token from overwriting another collector's rows. Legacy tokens have no collector_id.
+  if (tokenRow.collector_id && tokenRow.collector_id !== payload.identity.collector_id) {
+    return new Response("token does not belong to this collector", { status: 403, headers: corsHeaders });
   }
   if (!payload.idempotency_key) {
     return new Response("missing idempotency key", { status: 400, headers: corsHeaders });
@@ -96,12 +108,16 @@ Deno.serve(async (req) => {
     .eq("idempotency_key", payload.idempotency_key)
     .maybeSingle();
   if (existingRun) {
+    // Unchanged data still counts as a sync; the dashboard's last_sync_at reads received_at.
+    const seenAt = new Date().toISOString();
+    await supabase.from("collector_runs").update({ received_at: seenAt }).eq("idempotency_key", payload.idempotency_key);
+    await supabase.from("collector_tokens").update({ last_used_at: seenAt }).eq("token_hash", tokenHash);
     return Response.json({ ok: true, duplicate: true }, { headers: corsHeaders });
   }
 
   const now = new Date().toISOString();
 
-  await supabase.from("machines").upsert({
+  const { error: machineError } = await supabase.from("machines").upsert({
     org_id: orgId,
     machine_id: identity.machine_id,
     hostname: identity.hostname,
@@ -109,8 +125,9 @@ Deno.serve(async (req) => {
     platform: identity.platform || {},
     last_seen_at: now,
   });
+  if (machineError) return new Response(machineError.message, { status: 500, headers: corsHeaders });
 
-  await supabase.from("machine_users").upsert({
+  const { error: machineUserError } = await supabase.from("machine_users").upsert({
     org_id: orgId,
     user_id: identity.user_id,
     machine_id: identity.machine_id,
@@ -118,21 +135,7 @@ Deno.serve(async (req) => {
     home_path_hash: identity.home_path_hash,
     last_seen_at: now,
   });
-
-  await supabase.from("collector_runs").insert({
-    org_id: orgId,
-    idempotency_key: payload.idempotency_key,
-    collector_id: identity.collector_id,
-    machine_id: identity.machine_id,
-    user_id: identity.user_id,
-    account_label: accountLabel,
-    collector_version: payload.collector_version,
-    period_start: payload.period_start,
-    period_end: payload.period_end,
-    transcript_digest: payload.transcript_digest,
-    summary: payload.summary || {},
-    payload,
-  });
+  if (machineUserError) return new Response(machineUserError.message, { status: 500, headers: corsHeaders });
 
   if (Array.isArray(payload.daily) && payload.daily.length) {
     const rows = payload.daily.map((row) => ({
@@ -162,6 +165,34 @@ Deno.serve(async (req) => {
     if (error) return new Response(error.message, { status: 500, headers: corsHeaders });
   }
 
+  if (Array.isArray(payload.sources) && payload.sources.length) {
+    const rows = payload.sources.map((row) => ({
+      ...row,
+      org_id: orgId,
+      collector_id: identity.collector_id,
+      machine_id: identity.machine_id,
+      user_id: identity.user_id,
+      account_label: accountLabel,
+      updated_at: now,
+    }));
+    const { error } = await supabase.from("usage_sources").upsert(rows);
+    if (error) return new Response(error.message, { status: 500, headers: corsHeaders });
+  }
+
+  if (Array.isArray(payload.activity_daily) && payload.activity_daily.length) {
+    const rows = payload.activity_daily.map((row) => ({
+      ...row,
+      org_id: orgId,
+      collector_id: identity.collector_id,
+      machine_id: identity.machine_id,
+      user_id: identity.user_id,
+      account_label: accountLabel,
+      updated_at: now,
+    }));
+    const { error } = await supabase.from("usage_activity_daily").upsert(rows);
+    if (error) return new Response(error.message, { status: 500, headers: corsHeaders });
+  }
+
   if (Array.isArray(payload.anomalies) && payload.anomalies.length) {
     const rows = payload.anomalies.map((row) => ({
       org_id: orgId,
@@ -177,6 +208,27 @@ Deno.serve(async (req) => {
     if (error) return new Response(error.message, { status: 500, headers: corsHeaders });
   }
 
+  // Recorded last: a run row marks the key as done, so a failed write above must stay retryable.
+  // The bulky arrays already live in the usage tables and are not duplicated here.
+  const { daily: _daily, sessions: _sessions, sources: _sources, activity_daily: _activity, ...runPayload } = payload;
+  const { error: runError } = await supabase.from("collector_runs").insert({
+    org_id: orgId,
+    idempotency_key: payload.idempotency_key,
+    collector_id: identity.collector_id,
+    machine_id: identity.machine_id,
+    user_id: identity.user_id,
+    account_label: accountLabel,
+    collector_version: payload.collector_version,
+    period_start: payload.period_start,
+    period_end: payload.period_end,
+    transcript_digest: payload.transcript_digest,
+    summary: payload.summary || {},
+    payload: runPayload,
+  });
+  if (runError && runError.code !== "23505") {
+    return new Response(runError.message, { status: 500, headers: corsHeaders });
+  }
+
   await supabase
     .from("collector_tokens")
     .update({ last_used_at: now })
@@ -187,6 +239,8 @@ Deno.serve(async (req) => {
     duplicate: false,
     daily_rows: payload.daily?.length || 0,
     session_rows: payload.sessions?.length || 0,
+    source_rows: payload.sources?.length || 0,
+    activity_rows: payload.activity_daily?.length || 0,
     anomalies: payload.anomalies?.length || 0,
   }, { headers: corsHeaders });
 });

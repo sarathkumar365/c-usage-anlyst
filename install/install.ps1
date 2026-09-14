@@ -8,7 +8,8 @@ param(
   [string]$ClaudeDir = $(if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $HOME ".claude" }),
   [int]$SyncIntervalMinutes = $(if ($env:SYNC_INTERVAL_MINUTES) { [int]$env:SYNC_INTERVAL_MINUTES } else { 30 }),
   [string]$ReleaseBaseUrl = $(if ($env:RELEASE_BASE_URL) { $env:RELEASE_BASE_URL } else { "https://github.com/sarathkumar365/c-usage-anlyst/releases/latest/download" }),
-  [string]$CollectorUrl = $(if ($env:COLLECTOR_URL) { $env:COLLECTOR_URL } else { "https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/main/claude_usage_analyzer.py" })
+  [string]$CollectorUrl = $(if ($env:COLLECTOR_URL) { $env:COLLECTOR_URL } else { "https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/main/claude_usage_analyzer.py" }),
+  [string]$PackageBaseUrl = $(if ($env:PACKAGE_BASE_URL) { $env:PACKAGE_BASE_URL } else { "https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/main/claude_usage" })
 )
 
 $ErrorActionPreference = "Stop"
@@ -72,6 +73,10 @@ if (Test-Url $EnrollUrl "Options") {
   Stop-Install "Supabase enroll unreachable" "Check internet/VPN/firewall and rerun."
 }
 
+if (-not $CollectorToken -and -not $env:ENROLLMENT_SECRET) {
+  Stop-Install "ENROLLMENT_SECRET is not set" "Run `$env:ENROLLMENT_SECRET = '<secret>' first, then rerun the install command."
+}
+
 $RuntimeMode = ""
 if (Test-Url $ReleaseAssetUrl) {
   Invoke-WebRequest -Uri $ReleaseAssetUrl -OutFile $BinPath -UseBasicParsing
@@ -92,6 +97,11 @@ if (Test-Url $ReleaseAssetUrl) {
     Stop-Install "Python 3.8+ is required for fallback, found $PyVersion" "Install Python 3.8+ or wait for native release assets."
   }
   Invoke-WebRequest -Uri $CollectorUrl -OutFile $ScriptPath -UseBasicParsing
+  $PackageDir = Join-Path $AppDir "claude_usage"
+  New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
+  foreach ($Module in @("__init__.py", "discovery.py")) {
+    Invoke-WebRequest -Uri "$PackageBaseUrl/$Module" -OutFile (Join-Path $PackageDir $Module) -UseBasicParsing
+  }
   $RuntimeMode = "python"
   Write-Check "OK" "Python fallback ready: $PyVersion"
 }
@@ -128,7 +138,7 @@ Register-ScheduledTask `
   -Action $Action `
   -Trigger $Trigger `
   -Settings $Settings `
-  -Description "Uploads metrics-only Claude Code usage aggregates." `
+  -Description "Uploads metrics-only Claude usage and activity aggregates." `
   -Force | Out-Null
 Write-Check "OK" "Scheduler installed: Task Scheduler"
 

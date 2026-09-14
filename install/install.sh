@@ -8,6 +8,7 @@ LOG_DIR="$APP_DIR/logs"
 SYNC_INTERVAL_MINUTES="${SYNC_INTERVAL_MINUTES:-30}"
 RELEASE_BASE_URL="${RELEASE_BASE_URL:-https://github.com/sarathkumar365/c-usage-anlyst/releases/latest/download}"
 COLLECTOR_URL="${COLLECTOR_URL:-https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/main/claude_usage_analyzer.py}"
+PACKAGE_BASE_URL="${PACKAGE_BASE_URL:-https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/main/claude_usage}"
 INGEST_URL="${INGEST_URL:-https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/ingest}"
 ENROLL_URL="${ENROLL_URL:-https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/enroll}"
 ORG_ID="${ORG_ID:-team-main}"
@@ -79,6 +80,10 @@ else
   block "Supabase enroll unreachable" "Check internet/VPN/firewall and rerun."
 fi
 
+if [ -z "${COLLECTOR_TOKEN:-}" ] && [ -z "${ENROLLMENT_SECRET:-}" ]; then
+  block "ENROLLMENT_SECRET is not set" "Rerun as: curl -fsSL <install-url> | ENROLLMENT_SECRET=<secret> sh"
+fi
+
 RUNTIME_PATH=""
 RUNTIME_MODE=""
 PYTHON_BIN=""
@@ -95,6 +100,10 @@ else
     "$PYTHON_BIN" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' || block "Python 3.8+ is required for fallback, found $PYTHON_VERSION" "Install Python 3.8+ or wait for native release assets."
     curl -fsSL "$COLLECTOR_URL" -o "$SCRIPT_PATH"
     chmod 600 "$SCRIPT_PATH"
+    mkdir -p "$APP_DIR/claude_usage"
+    for module in __init__.py discovery.py; do
+      curl -fsSL "$PACKAGE_BASE_URL/$module" -o "$APP_DIR/claude_usage/$module" || block "Could not download claude_usage/$module" "Check internet access and rerun."
+    done
     RUNTIME_PATH="$PYTHON_BIN $SCRIPT_PATH"
     RUNTIME_MODE="python"
     status "OK" "Python fallback ready: $PYTHON_VERSION"

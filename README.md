@@ -1,6 +1,8 @@
 # Claude Usage Analyzer
 
-Cross-platform Claude Code usage analyzer and metrics-only team collector.
+Cross-platform Claude usage and activity analyzer with a metrics-only team collector.
+
+The collector now runs a discovery phase before extraction. It inventories local Claude surfaces, then reports exact token usage where Claude exposes counters and derived/evidence activity where only local Desktop/Cowork metadata exists.
 
 ## Local Report
 
@@ -12,6 +14,12 @@ The default output is a colored, plain-English terminal report. Use the old deta
 
 ```bash
 python3 claude_usage_analyzer.py --verbose
+```
+
+Inspect discovered Claude surfaces with:
+
+```bash
+python3 claude_usage_analyzer.py --sources
 ```
 
 ## Collector Setup
@@ -52,15 +60,25 @@ values ('team-main', '00000000-0000-0000-0000-000000000000', 'admin');
 
 ## Install
 
+Enrollment requires a shared secret. Only its SHA-256 hash is stored, in the `enrollment_secrets` table (RLS on, no client access):
+
+```sql
+insert into enrollment_secrets(secret_hash, org_id, label)
+values (encode(digest('<secret>', 'sha256'), 'hex'), 'team-main', 'install secret');
+```
+
+Give the secret to installers out of band. It is sent only during enrollment and is not stored on the machine. Rotate by inserting a new row and setting `revoked_at` on the old one.
+
 macOS/Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/main/install/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/main/install/install.sh | ENROLLMENT_SECRET='<secret>' sh
 ```
 
 Windows PowerShell:
 
 ```powershell
+$env:ENROLLMENT_SECRET = '<secret>'
 irm https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/main/install/install.ps1 | iex
 ```
 
@@ -85,6 +103,7 @@ python3 claude_usage_analyzer.py --register \
 python3 claude_usage_analyzer.py --status
 python3 claude_usage_analyzer.py --sync --days 90
 python3 claude_usage_analyzer.py --sync --dry-run --days 90
+python3 claude_usage_analyzer.py --sync --surface desktop --days 90
 ```
 
 ## Dashboard
@@ -106,8 +125,10 @@ The collector uploads metrics only:
 
 - token counts
 - model/project/session aggregates
+- source confidence levels
+- Claude surface activity counts
 - machine/user identifiers
 - tool names and counts
 - anomaly flags
 
-It does not upload prompts, responses, raw transcript text, source file contents, Claude credentials, or API keys.
+It does not upload prompts, responses, raw transcript text, raw discovered paths, source file contents, Claude credentials, or API keys.

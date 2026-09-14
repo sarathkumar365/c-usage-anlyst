@@ -62,8 +62,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from claude_usage.discovery import (
+    SourceRecord,
+    cache_discovery,
+    discover_claude_sources,
+    discovery_needs_full,
+    evidence_exists,
+)
 
-APP_VERSION = "0.4.3"
+
+APP_VERSION = "0.5.0"
 DEFAULT_SYNC_INTERVAL_MINUTES = 30
 DEFAULT_ENROLL_URL = "https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/enroll"
 DEFAULT_INGEST_URL = "https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/ingest"
@@ -210,6 +218,19 @@ class SessionSummary:
         if self.duration_seconds <= 0:
             return 0.0
         return self.reported_total / (self.duration_seconds / 3600.0)
+
+
+@dataclass
+class ActivityDaily:
+    day: str
+    surface: str
+    source_id: str
+    sessions: int = 0
+    messages: int = 0
+    turns: int = 0
+    tool_calls: int = 0
+    reported_total: int = 0
+    confidence: str = "evidence"
 
 
 def c(text: str, color: str, enabled: bool = True) -> str:
@@ -457,6 +478,130 @@ def save_agent_state(state: dict[str, Any]):
     write_json_file(state_path(), state)
 
 
+def run_discovery(full: bool = True) -> list[SourceRecord]:
+    state = load_agent_state()
+    cached = []
+    if not full:
+        discovery = state.get("discovery") if isinstance(state.get("discovery"), dict) else {}
+        cached = discovery.get("sources") if isinstance(discovery.get("sources"), list) else []
+    sources, cache = discover_claude_sources(CLAUDE_DIR, full=full, cached_sources=cached)
+    state = cache_discovery(state, cache, claude_dir=CLAUDE_DIR, collector_version=APP_VERSION)
+    save_agent_state(state)
+    return sources
+
+
+def discover_for_sync() -> tuple[list[SourceRecord], bool]:
+    state = load_agent_state()
+    full = discovery_needs_full(
+        state,
+        claude_dir=CLAUDE_DIR,
+        collector_version=APP_VERSION,
+    )
+    sources = run_discovery(full=full)
+    return sources, full
+
+
+def confidence_rank(value: str) -> int:
+    return {"exact": 3, "derived": 2, "evidence": 1}.get(value, 0)
+
+
+def print_sources(sources: list[SourceRecord]):
+    print()
+    print(c("=" * 80, "cyan"))
+    print(c(" CLAUDE SURFACE DISCOVERY", "bold"))
+    print(c("=" * 80, "cyan"))
+    if not sources:
+        print(c("No Claude-related local sources were discovered.", "yellow"))
+        return
+    rows = []
+    for source in sorted(sources, key=lambda s: (s.surface, -confidence_rank(s.confidence), s.path)):
+        rows.append([
+            source.surface,
+            source.confidence,
+            source.status,
+            fmt_int(source.file_count),
+            source.latest_activity_at or "n/a",
+            source.extractor,
+            source.path,
+        ])
+    print_table(["SURFACE", "CONF", "STATUS", "FILES", "LATEST", "EXTRACTOR", "PATH"], rows, 100)
+    print()
+
+
+def date_key_from_iso(value: str | None) -> str:
+    dt = parse_ts(value)
+    return dt.astimezone().strftime("%Y-%m-%d") if dt else "unknown"
+
+
+def extract_activity_daily(sources: list[SourceRecord]) -> list[ActivityDaily]:
+    rows: dict[tuple[str, str, str, str], ActivityDaily] = {}
+    for source in sources:
+        if source.status != "present" or source.confidence == "exact":
+            continue
+        day = date_key_from_iso(source.latest_activity_at)
+        if day == "unknown":
+            continue
+        key = (day, source.surface, source.source_id, source.confidence)
+        rows[key] = ActivityDaily(
+            day=day,
+            surface=source.surface,
+            source_id=source.source_id,
+            confidence=source.confidence,
+        )
+
+        if source.extractor == "claude_desktop_cowork":
+            activity = rows[key]
+            path = Path(source.path)
+            json_paths = [path] if path.is_file() and path.suffix == ".json" else []
+            if path.is_dir():
+                json_paths = [p for p in path.rglob("*.json") if p.name != "scheduled-tasks.json"]
+            enabled_tools: set[str] = set()
+            for json_path in json_paths[:5000]:
+                meta = read_json_file(json_path)
+                try:
+                    activity.turns += int(meta.get("completedTurns") or 0)
+                except Exception:
+                    pass
+                tools = meta.get("enabledMcpTools")
+                if isinstance(tools, dict):
+                    enabled_tools.update(str(name) for name in tools)
+            activity.sessions += len(json_paths[:5000]) if json_paths else 1
+            activity.tool_calls += len(enabled_tools)
+        elif source.extractor == "claude_desktop_extensions":
+            activity = rows[key]
+            path = Path(source.path)
+            if path.is_dir():
+                activity.tool_calls += max(1, source.file_count)
+            else:
+                meta = read_json_file(path)
+                activity.tool_calls += len(meta) if meta else 1
+        else:
+            rows[key].messages += source.file_count
+
+    return sorted(rows.values(), key=lambda r: (r.day, r.surface, r.source_id))
+
+
+def sanitize_sync_anomalies(anomalies: list[dict[str, str]]) -> list[dict[str, str]]:
+    replacements = {
+        str(CLAUDE_DIR): "<claude_config_dir>",
+        str(PROJECTS_DIR): "<claude_projects_dir>",
+        str(STATS_CACHE): "<claude_stats_cache>",
+        str(Path.home()): "<home>",
+    }
+    sanitized = []
+    for anomaly in anomalies:
+        message = anomaly.get("message", "")
+        for raw, label in replacements.items():
+            if raw:
+                message = message.replace(raw, label)
+        sanitized.append({
+            "code": anomaly.get("code", "unknown"),
+            "severity": anomaly.get("severity", "warn"),
+            "message": message,
+        })
+    return sanitized
+
+
 def register_collector(args: argparse.Namespace):
     existing = load_agent_config()
     claude_config_dir = (
@@ -554,12 +699,14 @@ def enroll_collector(args: argparse.Namespace):
         "collector_label": args.collector_label or existing.get("collector_label") or socket.gethostname(),
     }
     identity = collect_identity(identity_config)
+    if not args.enrollment_secret:
+        raise RuntimeError("Enrollment requires ENROLLMENT_SECRET (or --enrollment-secret). Ask your admin for it.")
     result = post_json(args.enroll_url, {
         "schema_version": 1,
         "collector_version": APP_VERSION,
         "org_id": args.org_id or existing.get("org_id") or "",
         "identity": identity,
-    })
+    }, headers={"X-Enrollment-Secret": args.enrollment_secret})
     response = result.get("response") or {}
     collector_token = response.get("collector_token")
     ingest_url = response.get("ingest_url")
@@ -723,6 +870,21 @@ def run_preflight(args: argparse.Namespace) -> int:
         warnings += 1
         print_preflight_check("WARN", "Claude stats cache", f"missing at {STATS_CACHE}")
 
+    sources = run_discovery(full=True)
+    present_sources = [s for s in sources if s.status == "present"]
+    exact_sources = [s for s in present_sources if s.confidence == "exact"]
+    derived_sources = [s for s in present_sources if s.confidence == "derived"]
+    evidence_sources = [s for s in present_sources if s.confidence == "evidence"]
+    if present_sources:
+        print_preflight_check(
+            "OK",
+            "Claude surfaces",
+            f"{len(present_sources)} present ({len(exact_sources)} exact, {len(derived_sources)} derived, {len(evidence_sources)} evidence)",
+        )
+    else:
+        warnings += 1
+        print_preflight_check("WARN", "Claude surfaces", "none discovered")
+
     scheduler, detail, scheduler_ok = scheduler_status()
     if scheduler_ok:
         print_preflight_check("OK", "Scheduler available", scheduler)
@@ -733,7 +895,7 @@ def run_preflight(args: argparse.Namespace) -> int:
     if config:
         state = load_agent_state()
         print_preflight_check("INFO", "Existing install", config.get("collector_id", "configured"))
-        print_preflight_check("INFO", "Last sync", state.get("last_sync_at", "never"))
+        print_preflight_check("INFO", "Last sync", state.get("last_success_at", "never"))
     else:
         print_preflight_check("INFO", "Existing install", "none")
 
@@ -784,6 +946,20 @@ def print_status():
             plain_status("Anomaly", anomaly["message"], anomaly.get("severity", "warn"))
     else:
         plain_status("Anomalies", "No obvious Claude data location anomalies found.", "good")
+    sources = run_discovery(full=True)
+    present_sources = [s for s in sources if s.status == "present"]
+    plain_metric(
+        "Surfaces",
+        str(len(present_sources)),
+        "exact/derived/evidence Claude sources",
+        "good" if present_sources else "warn",
+    )
+    for source in sorted(present_sources, key=lambda s: (s.surface, -confidence_rank(s.confidence), s.path))[:10]:
+        plain_status(
+            source.surface,
+            f"{source.confidence} via {source.extractor}; {fmt_int(source.file_count)} files; latest {source.latest_activity_at or 'n/a'}",
+            "good" if source.confidence == "exact" else "info",
+        )
     print()
 
 
@@ -1727,10 +1903,13 @@ def build_sync_payload(
     paths: list[Path],
     period_start: datetime | None,
     period_end: datetime | None,
+    sources: list[SourceRecord] | None = None,
+    activity_daily: list[ActivityDaily] | None = None,
+    sync_scope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     config = load_agent_config()
     identity = collect_identity(config)
-    anomalies = discover_anomalies(paths)
+    anomalies = sanitize_sync_anomalies(discover_anomalies(paths))
     if os.environ.get("CLAUDE_CONFIG_DIR"):
         claude_config_source = "CLAUDE_CONFIG_DIR"
     elif config.get("claude_config_dir"):
@@ -1762,6 +1941,8 @@ def build_sync_payload(
     for (day, project, model), rows in sorted(daily_buckets.items()):
         daily_rows.append({
             "day": day,
+            "surface": "claude_code",
+            "confidence": "exact",
             "project": project,
             "project_name": short_project_name(project),
             "model": model,
@@ -1775,6 +1956,8 @@ def build_sync_payload(
     for s in sorted(sessions.values(), key=lambda x: x.reported_total, reverse=True):
         session_rows.append({
             "session_id": s.session_id,
+            "surface": "claude_code",
+            "confidence": "exact",
             "project": s.project,
             "project_name": short_project_name(s.project),
             "is_subagent": s.is_subagent,
@@ -1835,8 +2018,11 @@ def build_sync_payload(
         ],
     }
 
+    sources = sources or []
+    activity_daily = activity_daily or []
+
     payload_core = {
-        "schema_version": 1,
+        "schema_version": 2,
         "collector_version": APP_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "period_start": period_start.isoformat() if period_start else None,
@@ -1844,8 +2030,8 @@ def build_sync_payload(
         "org_id": config.get("org_id", ""),
         "identity": identity,
         "claude": {
-            "config_dir": str(CLAUDE_DIR),
-            "projects_dir": str(PROJECTS_DIR),
+            "config_dir_hash": stable_hash(str(CLAUDE_DIR)),
+            "projects_dir_hash": stable_hash(str(PROJECTS_DIR)),
             "stats_cache_present": STATS_CACHE.exists(),
             "stats_cache_last_computed_date": stats.get("lastComputedDate") if stats else None,
             "config_source": claude_config_source,
@@ -1854,6 +2040,8 @@ def build_sync_payload(
             "requests": len(requests),
             "sessions": len(sessions),
             "transcript_files": len(paths),
+            "sources": len(sources),
+            "activity_days": len(activity_daily),
             "finalized_requests": sum(r.finalized for r in requests),
             "incomplete_requests": sum(not r.finalized for r in requests),
             "duplicate_records_removed": duplicate_records,
@@ -1861,6 +2049,8 @@ def build_sync_payload(
         },
         "daily": daily_rows,
         "sessions": session_rows,
+        "sources": [source.to_payload() for source in sources],
+        "activity_daily": [asdict(row) for row in activity_daily],
         "drivers": drivers,
         "anomalies": anomalies,
     }
@@ -1869,9 +2059,11 @@ def build_sync_payload(
         "collector_id": identity["collector_id"],
         "machine_id": identity["machine_id"],
         "user_id": identity["user_id"],
-        "period_start": payload_core["period_start"],
-        "period_end": payload_core["period_end"],
+        # Period bounds are derived from now(), so including them would make every run unique.
+        "sync_scope": sync_scope or {},
         "transcript_digest": payload_core["transcript_digest"],
+        "source_digest": stable_hash(payload_core["sources"]),
+        "activity_digest": stable_hash(payload_core["activity_daily"]),
     })
     return payload_core
 
@@ -1908,9 +2100,36 @@ def sync_usage(
     period_start: datetime | None,
     period_end: datetime | None,
     dry_run: bool = False,
+    surface_filter: str = "all",
+    sync_scope: dict[str, Any] | None = None,
 ):
     config = load_agent_config()
-    payload = build_sync_payload(requests, sessions, stats, paths, period_start, period_end)
+    sources, discovery_was_full = discover_for_sync()
+    if not requests and evidence_exists(sources, {"desktop_chat", "cowork", "desktop_app"}):
+        sources = run_discovery(full=True)
+        discovery_was_full = True
+    if surface_filter != "all":
+        wanted_surfaces = {
+            "claude-code": {"claude_code"},
+            "desktop": {"desktop_chat", "desktop_app"},
+            "cowork": {"cowork"},
+            "extensions": {"extensions"},
+        }.get(surface_filter)
+        if wanted_surfaces:
+            sources = [source for source in sources if source.surface in wanted_surfaces]
+    activity_daily = extract_activity_daily(sources)
+    payload = build_sync_payload(
+        requests,
+        sessions,
+        stats,
+        paths,
+        period_start,
+        period_end,
+        sources=sources,
+        activity_daily=activity_daily,
+        sync_scope=sync_scope,
+    )
+    payload["summary"]["discovery_mode"] = "full" if discovery_was_full else "light"
 
     if dry_run:
         print(json.dumps({
@@ -1985,7 +2204,7 @@ def export_csv(path: Path, requests: list[RequestUsage]):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Analyze Claude Code local usage from ~/.claude/projects/*.jsonl"
+        description="Analyze local Claude usage and Claude surface activity on this machine."
     )
     parser.add_argument("--days", type=int, default=None, help="Only analyze the last N days.")
     parser.add_argument("--project", help="Filter by project path/name substring.")
@@ -2008,6 +2227,12 @@ def main():
                         help="Show collector install, identity, sync, and Claude data status.")
     parser.add_argument("--sync", action="store_true",
                         help="Upload metrics-only usage payload to the configured ingest endpoint.")
+    parser.add_argument("--sources", action="store_true",
+                        help="Print discovered Claude surfaces and confidence levels.")
+    parser.add_argument("--surface",
+                        choices=["all", "claude-code", "desktop", "cowork", "extensions"],
+                        default="all",
+                        help="Filter report/sync by Claude surface. Default: all.")
     parser.add_argument("--dry-run", action="store_true",
                         help="With --sync, print the upload payload instead of sending it.")
     parser.add_argument("--ingest-url",
@@ -2016,6 +2241,8 @@ def main():
                         help="Collector registration/upload token. Stored locally by --register.")
     parser.add_argument("--enroll-url", default=DEFAULT_ENROLL_URL,
                         help=f"HTTPS enrollment endpoint. Default: {DEFAULT_ENROLL_URL}.")
+    parser.add_argument("--enrollment-secret", default=os.environ.get("ENROLLMENT_SECRET", ""),
+                        help="Shared secret required by --enroll. Defaults to ENROLLMENT_SECRET; not stored.")
     parser.add_argument("--release-asset-url", default="",
                         help="Optional release asset URL to test during --preflight.")
     parser.add_argument("--org-id", help="Optional organization/team identifier for uploaded payloads.")
@@ -2051,7 +2278,11 @@ def main():
         if not args.enroll_url.startswith("https://"):
             print(c("--enroll-url must be an HTTPS URL.", "red"))
             sys.exit(2)
-        enroll_collector(args)
+        try:
+            enroll_collector(args)
+        except RuntimeError as exc:
+            print(c(str(exc), "red"))
+            sys.exit(2)
         return
 
     if args.status:
@@ -2060,6 +2291,10 @@ def main():
 
     if args.preflight:
         sys.exit(run_preflight(args))
+
+    if args.sources:
+        print_sources(run_discovery(full=True))
+        return
 
     paths = discover_jsonl()
     if not paths and not args.sync:
@@ -2084,10 +2319,15 @@ def main():
         wanted = set(r.session_id for r in reqs)
         sessions = {k: v for k, v in sessions.items() if k in wanted}
 
+    if args.surface != "all" and args.surface != "claude-code":
+        reqs = []
+        sessions = {}
+
     stats = load_stats_cache()
 
     if args.sync:
-        sync_usage(reqs, sessions, stats, paths, start, end, dry_run=args.dry_run)
+        sync_scope = {"days": args.days, "project": args.project, "main_only": args.main_only, "surface": args.surface}
+        sync_usage(reqs, sessions, stats, paths, start, end, dry_run=args.dry_run, surface_filter=args.surface, sync_scope=sync_scope)
         return
 
     if args.verbose:

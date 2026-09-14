@@ -274,6 +274,15 @@
             <option value="all">All time</option>
           </select>
         </label>
+        <label>Surface
+          <select id="surfaceFilter">
+            <option value="all" selected>All surfaces</option>
+            <option value="claude_code">Claude Code</option>
+            <option value="desktop_chat">Desktop Chat</option>
+            <option value="cowork">Cowork</option>
+            <option value="extensions">Extensions</option>
+          </select>
+        </label>
         <button id="refresh">Refresh</button>
         <button id="exportPeople" class="secondary">Export people</button>
         <button id="exportProjects" class="secondary">Export projects</button>
@@ -316,6 +325,22 @@
             <span class="subtle">Highest-token work, attributed</span>
           </div>
           <div class="table-wrap"><table id="sessions"></table></div>
+        </section>
+
+        <section class="band">
+          <div class="section-head">
+            <h2>Claude Sources</h2>
+            <span class="subtle" id="sourceCount">No source data loaded</span>
+          </div>
+          <div class="table-wrap"><table id="sources"></table></div>
+        </section>
+
+        <section class="band">
+          <div class="section-head">
+            <h2>Claude Activity</h2>
+            <span class="subtle">Derived and evidence-based activity</span>
+          </div>
+          <div class="table-wrap"><table id="activity"></table></div>
         </section>
       </div>
 
@@ -371,7 +396,7 @@
     let client = null;
     let selectedKey = null;
     let aliasTarget = null;
-    let exportRows = { people: [], projects: [], models: [] };
+    let exportRows = { people: [], projects: [], models: [], sources: [], activity: [] };
 
     const fmt = (n) => {
       n = Number(n || 0);
@@ -385,6 +410,15 @@
     const compactId = (value) => String(value || "").slice(0, 10);
     const keyOf = (row) => [row.user_id, row.machine_id, row.collector_id, row.account_label || ""].join("|");
     const sameIdentity = (row, key) => !key || keyOf(row) === key;
+    const selectedSurface = () => $("surfaceFilter").value;
+    const surfaceLabel = (value) => ({
+      claude_code: "Claude Code",
+      desktop_chat: "Desktop Chat",
+      desktop_app: "Desktop App",
+      cowork: "Cowork",
+      extensions: "Extensions",
+    }[value] || value || "Unknown");
+    const sameSurface = (row) => selectedSurface() === "all" || row.surface === selectedSurface();
     const cutoffDay = () => {
       const value = $("windowDays").value;
       if (value === "all") return null;
@@ -504,7 +538,7 @@
       return grouped[0] || null;
     }
 
-    function personRows(projects, models, peopleMeta) {
+    function personRows(projects, models, peopleMeta, activityRows = []) {
       const grouped = groupRows(projects, keyOf);
       const byKey = new Map(peopleMeta.map((row) => [keyOf(row), row]));
       const modelByKey = new Map();
@@ -533,20 +567,37 @@
           top_model: topModel ? topModel.label : "Unknown model",
           share: 0,
         };
-      });
+      }).concat(groupRows(activityRows.filter((row) => !grouped.some((group) => group.key === keyOf(row))), keyOf).map((group) => {
+        const first = group.rows[0];
+        return {
+          ...first,
+          key: group.key,
+          reported_total: 0,
+          requests: 0,
+          cache_tokens: 0,
+          cache_share: 0,
+          top_project: "No project",
+          top_model: "Unknown model",
+          share: 0,
+        };
+      }));
     }
 
-    function metricCards(people, projects, models, anomalies) {
+    function metricCards(people, projects, models, anomalies, sources, activity) {
       const total = people.reduce((sum, row) => sum + Number(row.reported_total || 0), 0);
       const cache = people.reduce((sum, row) => sum + Number(row.cache_tokens || 0), 0);
       const stale = people.filter((row) => healthFor(row)[1] === "Stale").length;
       const topPerson = people[0];
       const topProject = topBy(projects, (row) => row.project_name || row.project);
       const topModel = topBy(models, (row) => row.model_label);
+      const derivedActivity = activity.reduce((sum, row) => sum + Number(row.sessions || 0) + Number(row.messages || 0) + Number(row.turns || 0), 0);
+      const exactSources = sources.filter((row) => row.confidence === "exact").length;
       const items = [
         ["Total usage", fmt(total), $("windowDays").selectedOptions[0].textContent, "neutral"],
         ["People", people.length, topPerson ? `${topPerson.person_label} leads` : "No usage", "neutral"],
         ["Machines", new Set(people.map((row) => row.machine_id)).size, "Reporting collectors", "neutral"],
+        ["Claude sources", sources.length, `${exactSources} exact, ${sources.length - exactSources} derived/evidence`, sources.length ? "good" : "warn"],
+        ["Activity signals", fmt(derivedActivity), "Sessions, messages, and turns", derivedActivity ? "good" : "neutral"],
         ["Cache share", pct(total ? cache / total : 0), total && cache / total > 0.9 ? "Very high context reuse" : "Normal context reuse", total && cache / total > 0.9 ? "warn" : "good"],
         ["Stale collectors", stale, stale ? "No sync in 2h+" : "All recent", stale ? "bad" : "good"],
         ["Open anomalies", anomalies.length, anomalies.length ? "Needs review" : "Clean", anomalies.length ? "warn" : "good"],
@@ -558,8 +609,9 @@
           <div class="metric-note">${esc(note)}</div>
         </div>
       `).join("");
+      const nonExact = sources.some((row) => row.confidence !== "exact");
       $("headline").textContent = topProject && topModel
-        ? `Top driver: ${topProject.key} with ${fmt(topProject.tokens)}; top model: ${topModel.key}`
+        ? `Top driver: ${topProject.key} with ${fmt(topProject.tokens)}; top model: ${topModel.key}${nonExact ? "; exact tokens + detected activity" : ""}`
         : `Attribution, drivers, and collector health for ${$("orgId").value.trim() || DEFAULT_ORG_ID}`;
     }
 
@@ -669,16 +721,71 @@
 
     function renderSessions(sessions, total) {
       const filtered = sessions.filter((row) => sameIdentity(row, selectedKey)).slice(0, 25);
-      table("sessions", ["Person", "Project", "Session", "Tokens", "Share", "Requests", "Rate", "Last activity"], filtered.map((row) => `
+      table("sessions", ["Person", "Surface", "Project", "Session", "Tokens", "Share", "Confidence", "Rate", "Last activity"], filtered.map((row) => `
         <tr>
           <td>${esc(row.person_label)}<div class="subtle">${esc(row.machine_label)}</div></td>
+          <td>${esc(surfaceLabel(row.surface))}</td>
           <td>${esc(row.project_name || row.project)}</td>
           <td><span class="mono" title="${esc(row.session_id)}">${esc(compactId(row.session_id))}</span>${row.is_subagent ? ' <span class="badge neutral">Subagent</span>' : ""}</td>
           <td class="name">${fmt(row.reported_total)}</td>
           <td>${pct(total ? Number(row.reported_total || 0) / total : 0)}</td>
-          <td>${esc(row.requests || 0)}</td>
+          <td><span class="badge ${row.confidence === "exact" ? "good" : "neutral"}">${esc(row.confidence || "exact")}</span></td>
           <td>${fmt(row.tokens_per_hour || 0)}/h</td>
           <td>${esc(timeAgo(row.last_ts))}</td>
+        </tr>
+      `));
+    }
+
+    function renderSources(sources) {
+      const filtered = sources.filter((row) => sameIdentity(row, selectedKey)).filter(sameSurface);
+      $("sourceCount").textContent = `${filtered.length} discovered`;
+      exportRows.sources = filtered.map((row) => ({
+        person: row.person_label,
+        machine: row.machine_label,
+        surface: surfaceLabel(row.surface),
+        status: row.status,
+        confidence: row.confidence,
+        files: row.file_count,
+        latest_activity: row.latest_activity_at || "",
+        extractor: row.extractor,
+      }));
+      table("sources", ["Person", "Machine", "Surface", "Status", "Confidence", "Files", "Latest", "Extractor"], filtered.map((row) => `
+        <tr>
+          <td>${esc(row.person_label)}</td>
+          <td>${esc(row.machine_label)}</td>
+          <td>${esc(surfaceLabel(row.surface))}</td>
+          <td><span class="badge ${row.status === "present" ? "good" : "warn"}">${esc(row.status)}</span></td>
+          <td><span class="badge ${row.confidence === "exact" ? "good" : row.confidence === "derived" ? "warn" : "neutral"}">${esc(row.confidence)}</span></td>
+          <td>${fmt(row.file_count)}</td>
+          <td>${esc(timeAgo(row.latest_activity_at))}</td>
+          <td>${esc(row.extractor)}</td>
+        </tr>
+      `));
+    }
+
+    function renderActivity(activity) {
+      const filtered = activity.filter((row) => sameIdentity(row, selectedKey)).filter(sameSurface);
+      exportRows.activity = filtered.map((row) => ({
+        day: row.day,
+        person: row.person_label,
+        machine: row.machine_label,
+        surface: surfaceLabel(row.surface),
+        sessions: row.sessions,
+        messages: row.messages,
+        turns: row.turns,
+        tools: row.tool_calls,
+        confidence: row.confidence,
+      }));
+      table("activity", ["Day", "Person", "Surface", "Sessions", "Messages", "Turns", "Tools", "Confidence"], filtered.slice(0, 80).map((row) => `
+        <tr>
+          <td>${esc(row.day)}</td>
+          <td>${esc(row.person_label)}<div class="subtle">${esc(row.machine_label)}</div></td>
+          <td>${esc(surfaceLabel(row.surface))}</td>
+          <td>${fmt(row.sessions)}</td>
+          <td>${fmt(row.messages)}</td>
+          <td>${fmt(row.turns)}</td>
+          <td>${fmt(row.tool_calls)}</td>
+          <td><span class="badge ${row.confidence === "derived" ? "warn" : "neutral"}">${esc(row.confidence)}</span></td>
         </tr>
       `));
     }
@@ -748,23 +855,30 @@
       `;
     }
 
-    let currentData = { peopleMeta: [], projects: [], models: [], sessions: [], anomalies: [] };
+    let currentData = { peopleMeta: [], projects: [], models: [], sessions: [], anomalies: [], sources: [], activity: [] };
 
     function renderCurrent() {
-      const people = personRows(currentData.projects, currentData.models, currentData.peopleMeta);
+      const projects = currentData.projects.filter(sameSurface);
+      const models = currentData.models.filter(sameSurface);
+      const sessions = currentData.sessions.filter(sameSurface);
+      const sources = currentData.sources.filter(sameSurface);
+      const activity = currentData.activity.filter(sameSurface);
+      const people = personRows(projects, models, currentData.peopleMeta, [...sources, ...activity]);
       const total = people.reduce((sum, row) => sum + Number(row.reported_total || 0), 0);
       for (const row of people) row.share = total ? Number(row.reported_total || 0) / total : 0;
       people.sort((a, b) => b.reported_total - a.reported_total);
-      metricCards(people, currentData.projects, currentData.models, currentData.anomalies);
+      metricCards(people, projects, models, currentData.anomalies, sources, activity);
       renderPeople(people, total);
       const scopedTotal = selectedKey
         ? people.filter((row) => row.key === selectedKey).reduce((sum, row) => sum + Number(row.reported_total || 0), 0)
         : total;
-      renderProjects(currentData.projects, scopedTotal);
-      renderModels(currentData.models, scopedTotal);
-      renderSessions(currentData.sessions, scopedTotal);
+      renderProjects(projects, scopedTotal);
+      renderModels(models, scopedTotal);
+      renderSessions(sessions, scopedTotal);
+      renderSources(currentData.sources);
+      renderActivity(currentData.activity);
       renderAnomalies(currentData.anomalies);
-      renderDrivers(people, currentData.projects, currentData.models, currentData.sessions);
+      renderDrivers(people, projects, models, sessions);
       renderDetail(people);
     }
 
@@ -785,15 +899,17 @@
       if (!user) return alert("Sign in to Supabase first.");
       $("status").textContent = "Loading analytics...";
       try {
-        const [peopleMeta, projects, models, sessions, anomalies] = await Promise.all([
+        const [peopleMeta, projects, models, sessions, anomalies, sources, activity] = await Promise.all([
           fetchView("dashboard_people_usage", { order: "reported_total", limit: 1000 }),
           fetchView("dashboard_user_project_usage", { dayColumn: "day", order: "reported_total", limit: 10000 }),
           fetchView("dashboard_user_model_usage", { dayColumn: "day", order: "reported_total", limit: 10000 }),
           fetchView("dashboard_sessions", { dayColumn: "last_ts", order: "reported_total", limit: 1000 }),
           fetchView("dashboard_anomalies", { order: "last_seen_at", limit: 500 }),
+          fetchView("dashboard_sources", { order: "latest_activity_at", limit: 5000 }),
+          fetchView("dashboard_activity_daily", { dayColumn: "day", order: "day", limit: 10000 }),
         ]);
-        currentData = { peopleMeta, projects, models, sessions, anomalies };
-        if (selectedKey && !projects.some((row) => keyOf(row) === selectedKey)) selectedKey = null;
+        currentData = { peopleMeta, projects, models, sessions, anomalies, sources, activity };
+        if (selectedKey && ![...projects, ...sources, ...activity].some((row) => keyOf(row) === selectedKey)) selectedKey = null;
         renderCurrent();
         $("status").textContent = `Loaded ${projects.length} project rows, ${models.length} model rows`;
       } catch (error) {
@@ -845,6 +961,7 @@
     $("login").addEventListener("click", login);
     $("refresh").addEventListener("click", refresh);
     $("windowDays").addEventListener("change", refresh);
+    $("surfaceFilter").addEventListener("change", renderCurrent);
     $("clearSelection").addEventListener("click", () => { selectedKey = null; renderCurrent(); });
     $("aliasSave").addEventListener("click", saveAlias);
     $("exportPeople").addEventListener("click", () => exportCsv("claude-usage-people", exportRows.people));

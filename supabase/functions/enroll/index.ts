@@ -25,7 +25,7 @@ const MAX_ENROLLMENTS_PER_IP_PER_DAY = 25;
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, content-type",
+  "Access-Control-Allow-Headers": "authorization, content-type, x-enrollment-secret",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
@@ -69,6 +69,11 @@ Deno.serve(async (req) => {
     return new Response("server is not configured", { status: 500, headers: corsHeaders });
   }
 
+  const providedSecret = req.headers.get("x-enrollment-secret") || "";
+  if (!providedSecret) {
+    return new Response("missing enrollment secret", { status: 401, headers: corsHeaders });
+  }
+
   let payload: EnrollPayload;
   try {
     payload = await req.json();
@@ -86,6 +91,20 @@ Deno.serve(async (req) => {
   });
 
   const orgId = DEFAULT_ORG_ID;
+
+  const { data: secretRow, error: secretError } = await supabase
+    .from("enrollment_secrets")
+    .select("secret_hash")
+    .eq("org_id", orgId)
+    .eq("secret_hash", await sha256Hex(providedSecret))
+    .is("revoked_at", null)
+    .maybeSingle();
+  if (secretError) {
+    return new Response(secretError.message, { status: 500, headers: corsHeaders });
+  }
+  if (!secretRow) {
+    return new Response("invalid enrollment secret", { status: 403, headers: corsHeaders });
+  }
   const ipHash = await sha256Hex(`${clientIp(req)}:${new Date().toISOString().slice(0, 10)}:${serviceRoleKey}`);
   const since = new Date();
   since.setUTCHours(0, 0, 0, 0);
