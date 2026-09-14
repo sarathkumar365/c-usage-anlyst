@@ -103,9 +103,30 @@ async function enforceRateLimit(supabase: SupabaseClient, ipHash: string) {
   if ((count || 0) >= MAX_ENROLLMENTS_PER_IP_PER_DAY) throw new HttpError(429, "daily enrollment limit reached");
 }
 
-async function issueToken(supabase: SupabaseClient, orgId: string, identity: EnrollIdentity & { collector_id: string }, ipHash: string): Promise<string> {
+async function issueToken(
+  supabase: SupabaseClient,
+  orgId: string,
+  identity: EnrollIdentity & { collector_id: string },
+  ipHash: string,
+): Promise<{ token: string; machineId: string; userId: string }> {
   const token = randomToken();
   const now = new Date().toISOString();
+
+  // Re-enrolling keeps the IDs already on record: older collectors derive them from network names,
+  // so a reinstall on another network would otherwise start a new machine and split its history.
+  const { data: previous, error: previousError } = await supabase
+    .from("collector_tokens")
+    .select("machine_id, user_id")
+    .eq("org_id", orgId)
+    .eq("collector_id", identity.collector_id)
+    .not("machine_id", "is", null)
+    .not("user_id", "is", null)
+    .order("enrolled_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (previousError) throw new HttpError(500, previousError.message);
+  const machineId = previous?.machine_id || identity.machine_id;
+  const userId = previous?.user_id || identity.user_id;
 
   // One active token per collector: re-enrolling revokes the previous one.
   await supabase
@@ -120,13 +141,13 @@ async function issueToken(supabase: SupabaseClient, orgId: string, identity: Enr
     org_id: orgId,
     label: [identity.os_username || "unknown-user", identity.hostname || identity.collector_label || "unknown-host", now].join(" / "),
     collector_id: identity.collector_id,
-    machine_id: identity.machine_id,
-    user_id: identity.user_id,
+    machine_id: machineId,
+    user_id: userId,
     enrolled_at: now,
     enrollment_ip_hash: ipHash,
   });
   if (error) throw new HttpError(500, error.message);
-  return token;
+  return { token, machineId, userId };
 }
 
 async function handle(req: Request): Promise<Response> {
@@ -144,13 +165,15 @@ async function handle(req: Request): Promise<Response> {
 
   const ipHash = await sha256Hex(`${clientIp(req)}:${new Date().toISOString().slice(0, 10)}:${serviceRoleKey}`);
   await enforceRateLimit(supabase, ipHash);
-  const token = await issueToken(supabase, orgId, identity, ipHash);
+  const { token, machineId, userId } = await issueToken(supabase, orgId, identity, ipHash);
 
   return Response.json({
     ok: true,
     org_id: orgId,
     ingest_url: `${supabaseUrl}${DEFAULT_INGEST_PATH}`,
     collector_token: token,
+    machine_id: machineId,
+    user_id: userId,
     sync_interval_minutes: DEFAULT_SYNC_INTERVAL_MINUTES,
   }, { headers: corsHeaders });
 }

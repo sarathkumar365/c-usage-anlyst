@@ -98,8 +98,9 @@ def enroll(
         **existing,
         "schema_version": 1,
         "collector_id": collector_id,
-        "machine_id": identity["machine_id"],
-        "user_id": identity["user_id"],
+        # The server keeps the IDs from an earlier enrollment of this collector, so its answer wins.
+        "machine_id": response.get("machine_id") or identity["machine_id"],
+        "user_id": response.get("user_id") or identity["user_id"],
         "enroll_url": enroll_url,
         "ingest_url": ingest_url,
         "collector_token": collector_token,
