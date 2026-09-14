@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
-import platform
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from claude_usage.constants import CLAUDE_CHROME_EXTENSION_ID, CLAUDE_CODE_EXTENSION_PREFIX
+from claude_usage.paths import app_data_roots, claude_json_path, extension_evidence_paths
 from claude_usage.util import parse_ts, stable_hash
 
 
@@ -37,6 +38,7 @@ STRUCTURAL_SOURCE_NAMES = {
     "claude extensions settings",
     "native messaginghosts",
     "nativemessaginghosts",
+    "local-agent-mode-sessions",
 }
 SAFE_METADATA_NAMES = {
     "claude_desktop_config.json",
@@ -111,30 +113,7 @@ def path_depth(path: Path, root: Path) -> int:
 
 def known_parent_roots(system: str | None = None, home: Path | None = None, claude_dir: Path | None = None) -> list[Path]:
     home = home or Path.home()
-    system = system or platform.system()
-    roots = [claude_dir or home / ".claude"]
-    if system == "Darwin":
-        roots.extend([
-            home / "Library" / "Application Support",
-            home / "Library" / "Logs",
-            home / "Library" / "Preferences",
-        ])
-    elif system == "Windows":
-        appdata = os.environ.get("APPDATA")
-        localappdata = os.environ.get("LOCALAPPDATA")
-        roots.extend([
-            Path(appdata) if appdata else home / "AppData" / "Roaming",
-            Path(localappdata) if localappdata else home / "AppData" / "Local",
-        ])
-    elif system == "Linux":
-        roots.extend([
-            home / ".config",
-            home / ".cache",
-            home / ".local" / "share",
-        ])
-    else:
-        roots.extend([home])
-    return unique_paths(roots)
+    return unique_paths([claude_dir or home / ".claude", *app_data_roots(system, home)])
 
 
 def unique_paths(paths: Iterable[Path]) -> list[Path]:
@@ -159,9 +138,15 @@ def classify_source(path: Path, claude_dir: Path) -> tuple[str, str, str]:
         return "claude_code", "exact", "claude_code_jsonl"
     if name == "stats-cache.json":
         return "claude_code", "exact", "claude_code_stats"
-    if text.startswith(str(claude_dir).lower()):
+    if text.startswith(str(claude_dir).lower()) or name in (".claude.json", "claude", "claude.exe") or "/claude/versions" in text.replace("\\", "/"):
         return "claude_code", "evidence", "claude_code_config"
-    if "claude-code-sessions" in text or "claude-code-vm" in text or "vm_bundles" in text or "cowork" in text:
+    if name.startswith(CLAUDE_CODE_EXTENSION_PREFIX) or "jetbrains" in text:
+        return "ide_extension", "evidence", "ide_extension"
+    if name == CLAUDE_CHROME_EXTENSION_ID:
+        return "browser_extension", "evidence", "browser_extension"
+    if "claude-code-sessions" in text:
+        return "desktop_code", "derived", "claude_desktop_code"
+    if "local-agent-mode-sessions" in text or "claude-code-vm" in text or "vm_bundles" in text or "cowork" in text:
         return "cowork", "derived", "claude_desktop_cowork"
     if "extensions" in text or "native messaginghosts" in text or "nativemessaginghosts" in text or "claude_desktop_config" in name:
         return "extensions", "derived", "claude_desktop_extensions"
@@ -224,6 +209,8 @@ def discover_claude_sources(
         claude_dir / "projects",
         claude_dir / "stats-cache.json",
         claude_dir / "history.jsonl",
+        claude_json_path(claude_dir, home),
+        *extension_evidence_paths(system, home),
     ):
         if seed.exists():
             candidates[str(seed)] = seed

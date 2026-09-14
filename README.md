@@ -17,6 +17,20 @@ This project answers exactly those questions for a shared account:
 
 Every design choice should be judged against these goals. The collector sends metrics only, never prompt or response content.
 
+### What each machine can and cannot see
+
+| Signal | Source | Exact? |
+|---|---|---|
+| Tokens per request, session, project, model, branch | Claude Code transcripts (terminal, IDE, Desktop Code tab, Agent SDK, Cowork) in every Claude config dir | Exact |
+| Which Claude account the machine is signed in to | `~/.claude.json`, Claude Desktop session folders | Exact (email only as a hash) |
+| The account's 5-hour and 7-day usage % | Claude Desktop `plan-usage-history.json`, and Claude Code's statusline input captured by the collector | Account-wide, covers claude.ai web too |
+| Desktop Code tab and Cowork sessions (model, effort, turns) | Claude Desktop session records | Exact metadata, no titles |
+| Claude Desktop chat, IDE and Chrome extensions | Local files and folders | Activity or install evidence only |
+
+claude.ai web and Desktop chat conversations live on Anthropic's servers, and Pro/Max accounts have no usage API, so their per-person tokens cannot be measured. The dashboard instead compares rises in the account's usage % with activity from tracked machines and shows the untracked share as an estimate.
+
+Not collected on purpose: prompts and responses, session titles, browser history or cookies, Claude credentials (so no calls to Anthropic's private usage endpoints), and other OS users on the same machine (install once per user).
+
 ## How It Is Organized
 
 Every piece of work belongs to one flow. Each flow is one module that receives already-resolved inputs and owns its own side effects.
@@ -26,7 +40,8 @@ Every piece of work belongs to one flow. Each flow is one module that receives a
 | Discover | `claude_usage/flows/discover.py` → `discovery.py` | – | `state.json` (`discovery`) |
 | Collect | `claude_usage/flows/collect.py` → `transcripts.py` | – | nothing |
 | Enroll / register | `claude_usage/flows/enroll.py` | `supabase/functions/enroll` | `config.json`, `collector_tokens` |
-| Sync | `claude_usage/flows/sync.py` → `activity.py`, `anomalies.py`, `payload.py` | `supabase/functions/ingest` | `state.json`, usage tables |
+| Sync | `claude_usage/flows/sync.py` → `accounts.py`, `plan_usage.py`, `desktop_sessions.py`, `activity.py`, `anomalies.py`, `payload.py` | `supabase/functions/ingest` | `state.json`, usage, account and plan usage tables |
+| Statusline capture | `claude_usage/flows/statusline.py` | – | Claude `settings.json` (`statusLine`), agent `config.json`, `plan-samples.jsonl` |
 | Preflight / status | `claude_usage/flows/preflight.py`, `status.py` | – | `state.json` (via discover) |
 | Reports | `claude_usage/reports/` (plain, verbose, sources, export) | – | export files only |
 | Dashboard | `dashboard/index.html` | `dashboard_*` views in `supabase/schema.sql` | `identity_aliases` (admins) |
@@ -34,7 +49,7 @@ Every piece of work belongs to one flow. Each flow is one module that receives a
 
 Shared building blocks: `cli.py` (argument parsing and dispatch only), `paths.py` (the single Claude/agent directory resolver), `store.py` (the only reader/writer of `config.json`/`state.json`), `identity.py`, `transport.py` (HTTP), `models.py`, `metrics.py`, `ui.py`, `util.py`, `constants.py`. `claude_usage_analyzer.py` is only the entry point.
 
-A sync runs: collect transcripts → discover sources → extract activity → build the payload (pure, no I/O) → upload → record the outcome in `state.json`. Ingest runs: authenticate token → validate payload → skip duplicates → write usage rows → record the run.
+A sync runs: collect transcripts from every Claude dir → discover sources → read accounts, plan usage and Desktop sessions → extract activity → build the payload (pure, no I/O) → upload → record the outcome and plan usage cursor in `state.json`. Ingest runs: authenticate token → validate payload → skip duplicates → write usage rows → record the run.
 
 Database changes go in `supabase/migrations/` and are folded into `supabase/schema.sql`, which stays safe to re-run.
 
@@ -76,7 +91,7 @@ Ref     : yeokmzmmldqjngwtrfso
 URL     : https://yeokmzmmldqjngwtrfso.supabase.co
 Org ID  : team-main
 Ingest  : https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/ingest
-Dashboard: https://c-usage-anlyst.poetic-whale-8476.chatgpt.site
+Dashboard: https://claude-usage-dashboard.netlify.app
 ```
 
 Example SQL for first setup:
@@ -124,7 +139,7 @@ $env:ENROLLMENT_SECRET = '<secret>'
 irm https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/main/install/install.ps1 | iex
 ```
 
-The installer runs a preflight system check, downloads the native agent binary for the user's OS/CPU when a GitHub Release asset is available, enrolls the machine, stores user-level config, schedules a sync every 30 minutes, and runs one immediate sync. If release binaries are unavailable, it downloads the source archive and runs it with Python 3.8+. If you need the old explicit-token install path, set `COLLECTOR_TOKEN` before running the installer.
+The installer runs a preflight system check, downloads the native agent binary for the user's OS/CPU when a GitHub Release asset is available, enrolls the machine, stores user-level config, installs the usage % statusline capture, schedules a sync every 30 minutes, and runs one immediate sync. The capture keeps any statusline the member already has (it runs it after recording) and backs up `settings.json`; set `SKIP_STATUSLINE=1` to skip it, or run `--uninstall-statusline` later to restore the original. If release binaries are unavailable, it downloads the source archive and runs it with Python 3.8+. If you need the old explicit-token install path, set `COLLECTOR_TOKEN` before running the installer.
 
 Release binaries are built by GitHub Actions when a version tag is pushed:
 
@@ -146,6 +161,8 @@ python3 claude_usage_analyzer.py --status
 python3 claude_usage_analyzer.py --sync --days 90
 python3 claude_usage_analyzer.py --sync --dry-run --days 90
 python3 claude_usage_analyzer.py --sync --surface desktop --days 90
+python3 claude_usage_analyzer.py --install-statusline
+python3 claude_usage_analyzer.py --uninstall-statusline
 ```
 
 ## Dashboard
@@ -157,6 +174,8 @@ The dashboard opens on three views of the same question, who is using the most a
 - **Brief** — a written summary: the top user as a headline, the ranking, and short stories for the next people.
 - **Share** — a proportional field of people, projects, or models.
 - **Work lanes** — the last 7 days of sessions per person (length is time, height is tokens).
+
+The Brief also shows the shared account: its latest 5-hour and 7-day usage %, a sparkline for the range, and the estimated share of usage that happened while no tracked machine was active. Collectors show which Claude account each machine is signed in to and flag machines on a different account.
 
 Data pages (People, Projects & models, Sessions, Collectors) and a person panel sit alongside. "Why" reasons are derived in the page from session length, subagent share, context reuse, model mix, and top tools (`dashboard_person_tools`). Collectors come from each identity's latest sync (`dashboard_collectors`), so a machine that syncs but finds no Claude data still appears. All views are paged, so none is capped at PostgREST's row limit.
 
@@ -180,5 +199,8 @@ The collector uploads metrics only:
 - machine/user identifiers
 - tool names and counts
 - anomaly flags
+- Claude account and organization IDs, plan tier, and a hash of the login email
+- the account's usage percentages
+- git branch names, Claude Code version and install method, skill and plugin usage counts
 
-It does not upload prompts, responses, raw transcript text, raw discovered paths, source file contents, Claude credentials, or API keys.
+It does not upload prompts, responses, raw transcript text, session titles, login emails, raw discovered paths, source file contents, Claude credentials, or API keys.

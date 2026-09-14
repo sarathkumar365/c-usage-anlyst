@@ -10,8 +10,9 @@ from typing import Any
 from claude_usage.constants import APP_VERSION
 from claude_usage.discovery import SourceRecord
 from claude_usage.metrics import group_sum, token_breakdown
-from claude_usage.models import ActivityDaily, RequestUsage, SessionSummary
+from claude_usage.models import AccountSnapshot, ActivityDaily, DesktopSession, FeatureUsage, PlanUsageSample, RequestUsage, SessionSummary
 from claude_usage.paths import ClaudePaths
+from claude_usage.transcripts import version_key
 from claude_usage.ui import friendly_tool_name, short_project_name
 from claude_usage.util import date_key, stable_hash
 
@@ -33,6 +34,11 @@ def build_sync_payload(
     sources: list[SourceRecord] | None = None,
     activity_daily: list[ActivityDaily] | None = None,
     sync_scope: dict[str, Any] | None = None,
+    accounts: list[AccountSnapshot] | None = None,
+    install: dict[str, Any] | None = None,
+    feature_usage: list[FeatureUsage] | None = None,
+    plan_usage: list[PlanUsageSample] | None = None,
+    desktop_sessions: list[DesktopSession] | None = None,
 ) -> dict[str, Any]:
     duplicate_records = sum(max(0, r.duplicate_records - 1) for r in requests)
 
@@ -43,7 +49,7 @@ def build_sync_payload(
     for (day, project, model), rows in sorted(daily_buckets.items()):
         daily_rows.append({
             "day": day,
-            "surface": "claude_code",
+            "surface": rows[0].surface,
             "confidence": "exact",
             "project": project,
             "project_name": short_project_name(project),
@@ -54,11 +60,13 @@ def build_sync_payload(
             **token_breakdown(rows),
         })
 
+    desktop_by_id = {d.cli_session_id: d for d in desktop_sessions or []}
     session_rows = []
     for s in sorted(sessions.values(), key=lambda x: x.reported_total, reverse=True):
+        desktop = None if s.is_subagent else desktop_by_id.get(s.session_id)
         session_rows.append({
             "session_id": s.session_id,
-            "surface": "claude_code",
+            "surface": s.surface,
             "confidence": "exact",
             "project": s.project,
             "project_name": short_project_name(s.project),
@@ -80,6 +88,12 @@ def build_sync_payload(
             "cache_1h_tokens": s.cache_1h,
             "reported_total": s.reported_total,
             "tool_calls": s.tool_calls,
+            "git_branch": s.git_branch,
+            "entrypoints": list(s.entrypoints),
+            "claude_code_version": s.claude_code_version,
+            "desktop_surface": desktop.surface if desktop else None,
+            "desktop_effort": desktop.effort if desktop else None,
+            "completed_turns": desktop.completed_turns if desktop else None,
         })
 
     tool_counter = Counter()
@@ -122,6 +136,8 @@ def build_sync_payload(
 
     sources = sources or []
     activity_daily = activity_daily or []
+    versions = sorted({r.claude_code_version for r in requests if r.claude_code_version}, key=version_key)
+    install = {**(install or {}), "claude_code_version": versions[-1] if versions else None}
 
     payload_core = {
         "schema_version": 2,
@@ -155,7 +171,13 @@ def build_sync_payload(
         "activity_daily": [asdict(row) for row in activity_daily],
         "drivers": drivers,
         "anomalies": anomalies,
+        "accounts": [asdict(a) for a in accounts or []],
+        "install": install,
+        "feature_usage": [asdict(f) for f in feature_usage or []],
+        "plan_usage": [asdict(sample) for sample in plan_usage or []],
     }
+    payload_core["summary"]["accounts"] = len(payload_core["accounts"])
+    payload_core["summary"]["plan_usage_samples"] = len(payload_core["plan_usage"])
     payload_core["transcript_digest"] = transcript_digest
     payload_core["idempotency_key"] = stable_hash({
         "collector_id": identity["collector_id"],
@@ -166,5 +188,7 @@ def build_sync_payload(
         "transcript_digest": payload_core["transcript_digest"],
         "source_digest": stable_hash(payload_core["sources"]),
         "activity_digest": stable_hash(payload_core["activity_daily"]),
+        "account_digest": stable_hash([payload_core["accounts"], payload_core["install"], payload_core["feature_usage"]]),
+        "plan_usage_digest": stable_hash(payload_core["plan_usage"]),
     })
     return payload_core

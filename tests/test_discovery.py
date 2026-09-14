@@ -27,6 +27,9 @@ class DiscoveryTests(unittest.TestCase):
                 json.dumps({"completedTurns": 3, "enabledMcpTools": {"tool": True}}),
                 encoding="utf-8",
             )
+            (app_support / "local-agent-mode-sessions" / "acct" / "org").mkdir(parents=True)
+            (home / ".vscode" / "extensions" / "anthropic.claude-code-2.1.0").mkdir(parents=True)
+            (app_support.parent / "Google" / "Chrome" / "Default" / "Extensions" / "fcoeoabgfenejglbffodgkkbkcdhcgfn").mkdir(parents=True)
             (app_support / "IndexedDB" / "https_claude.ai_0.indexeddb.leveldb").mkdir(parents=True)
             (home / "Library" / "Preferences").mkdir(parents=True)
             (home / "Library" / "Preferences" / "com.anthropic.claudefordesktop.plist").write_text(
@@ -39,7 +42,10 @@ class DiscoveryTests(unittest.TestCase):
             confidences = {source.confidence for source in sources}
 
             self.assertIn("claude_code", surfaces)
+            self.assertIn("desktop_code", surfaces)
             self.assertIn("cowork", surfaces)
+            self.assertIn("ide_extension", surfaces)
+            self.assertIn("browser_extension", surfaces)
             self.assertIn("desktop_chat", surfaces)
             self.assertIn("desktop_app", surfaces)
             self.assertIn("exact", confidences)

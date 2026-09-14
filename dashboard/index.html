@@ -143,6 +143,10 @@
     .spark { display: flex; align-items: flex-end; gap: 3px; height: 28px; margin-top: 4px; }
     .spark div { flex: 1 1 0; background: #bdb9ae; min-height: 1px; }
     .spark div.peak { background: var(--ink); }
+    .account-strip { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1.4fr); gap: 24px; align-items: center; margin-top: 26px; padding: 16px 20px; }
+    .account-strip .meter { height: 6px; border-radius: 3px; background: var(--sunken); overflow: hidden; margin-top: 6px; }
+    .account-strip .meter div { height: 100%; background: var(--ink); }
+    .account-strip .spark { height: 36px; gap: 1px; }
     .brief-foot { margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--line-strong); display: flex; justify-content: space-between; gap: 24px; font-size: 13px; color: var(--ink-3); }
 
     /* Share */
@@ -224,7 +228,7 @@
       .topbar .tools { width: 100%; }
       .topbar .divider, .topbar .updated, .topbar .btn-label, .topbar .title .muted { display: none; }
       .content { padding: 20px 16px 40px; overflow: visible; }
-      .brief-hero, .stories { grid-template-columns: minmax(0, 1fr); }
+      .brief-hero, .stories, .account-strip { grid-template-columns: minmax(0, 1fr); }
       .ranking { border-left: 0; padding-left: 0; }
       .story { padding: 20px 0; border-right: 0; border-top: 1px solid var(--line-strong); }
       .stat-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -354,7 +358,9 @@
     // Lowercase a leading ordinary word only; keep names like "Haiku 4.5" or "Bash" intact.
     const lowerFirst = (text) => (/^(One|Two|Three|Four|Five|Six|Seven|Eight|Nine|Command-heavy|Reads|Mostly|Short|Spread|No)\b/.test(text) ? text.charAt(0).toLowerCase() + text.slice(1) : text);
     const rangeInfo = () => RANGES.find((r) => r.id === state.range) || RANGES[1];
-    const SURFACE_NAMES = { claude_code: "Code", desktop_chat: "Desktop", desktop_app: "Desktop", cowork: "Cowork", extensions: "Extensions" };
+    const SURFACE_NAMES = { claude_code: "Code", desktop_chat: "Desktop", desktop_app: "Desktop", desktop_code: "Desktop Code", cowork: "Cowork", extensions: "Extensions", ide_extension: "IDE", browser_extension: "Chrome" };
+    const ENTRYPOINT_NAMES = { cli: "Terminal", "claude-desktop": "Desktop", "claude-vscode": "VS Code", vscode: "VS Code", jetbrains: "JetBrains", "sdk-cli": "SDK", "sdk-ts": "SDK", "sdk-py": "SDK" };
+    const sessionOrigin = (s) => s.desktop_surface === "cowork" || s.surface === "cowork" ? "Cowork" : [...new Set((s.entrypoints || []).map((e) => ENTRYPOINT_NAMES[e] || e))].join(", ");
     const surfaceList = (surfaces) => [...new Set([...surfaces].map((s) => SURFACE_NAMES[s] || s))].join(", ");
     // platform.release is the kernel version on macOS, so only the OS family and architecture are shown.
     const platformLabel = (platform) => [{ Darwin: "macOS", Windows: "Windows", Linux: "Linux" }[platform?.system] || platform?.system, platform?.machine].filter(Boolean).join(" · ");
@@ -432,17 +438,22 @@
       state.loading = true; state.error = null; render();
       try {
         const identity = ["collector_id", "machine_id", "user_id", "account_label"];
-        const [people, projects, models, sessions, anomalies, sources, tools, collectors] = await Promise.all([
+        const sessionFilter = (column) => (q) => (range.days ? q.gte(column, sessionSince.toISOString()) : q);
+        const [people, projects, models, sessions, anomalies, sources, tools, collectors, accounts, features, planUsage] = await Promise.all([
           fetchAll("dashboard_people_usage", identity),
           fetchAll("dashboard_user_project_usage", ["day", ...identity, "surface", "confidence", "project"], (q) => (since ? q.gte("day", since) : q)),
           fetchAll("dashboard_user_model_usage", ["day", ...identity, "surface", "confidence", "model_label"], (q) => (since ? q.gte("day", since) : q)),
-          fetchAll("dashboard_sessions", [...identity, "session_id"], (q) => (range.days ? q.gte("last_ts", sessionSince.toISOString()) : q)),
+          fetchAll("dashboard_sessions", [...identity, "session_id"], sessionFilter("last_ts")),
           fetchAll("dashboard_anomalies", ["collector_id", "machine_id", "user_id", "code"]),
           fetchAll("dashboard_sources", [...identity, "source_id"]),
           fetchAll("dashboard_person_tools", [...identity, "tool"]),
           fetchAll("dashboard_collectors", identity),
+          fetchAll("dashboard_accounts", ["collector_id", "machine_id", "user_id", "account_uuid"]),
+          fetchAll("dashboard_features", ["collector_id", "machine_id", "user_id", "kind", "name"]),
+          // Same window as sessions, so rises in the account's usage can be matched against tracked activity.
+          fetchAll("dashboard_plan_usage", ["organization_uuid", "bucket_at"], sessionFilter("bucket_at")),
         ]);
-        state.raw = { people, projects, models, sessions, anomalies, sources, tools, collectors };
+        state.raw = { people, projects, models, sessions, anomalies, sources, tools, collectors, accounts, features, planUsage };
         state.loadedAt = new Date();
       } catch (error) {
         state.error = error.message;
@@ -491,6 +502,7 @@
             machine: row.machine_label || row.hostname || String(row.machine_id).slice(0, 10), account: row.account_display_label || "",
             meta: null, collector: null, tokens: 0, prevTokens: 0, requests: 0, cache: 0,
             projects: new Map(), models: new Map(), days: new Map(), sessions: [], allSessions: [], tools: [], anomalies: [], surfaces: new Set(),
+            accounts: [], features: [],
           });
         }
         return byKey.get(key);
@@ -533,13 +545,19 @@
         if (!cutoff || new Date(row.last_ts) >= cutoff) p.sessions.push(row);
       }
       for (const row of raw.tools) ensure(row).tools.push({ tool: row.tool, calls: num(row.calls) });
-      for (const row of raw.anomalies) {
-        for (const p of byKey.values()) if (p.user_id === row.user_id && p.machine_id === row.machine_id && p.collector_id === row.collector_id) p.anomalies.push(row);
-      }
+      // These rows carry no account label, so they attach to every person on the same collector identity.
+      const sameIdentity = (row) => [...byKey.values()].filter((p) => p.user_id === row.user_id && p.machine_id === row.machine_id && p.collector_id === row.collector_id);
+      for (const row of raw.anomalies) for (const p of sameIdentity(row)) p.anomalies.push(row);
+      for (const row of raw.accounts || []) for (const p of sameIdentity(row)) p.accounts.push(row);
+      for (const row of raw.features || []) for (const p of sameIdentity(row)) p.features.push(row);
       for (const row of raw.sources) if (row.status === "present") ensure(row).surfaces.add(row.surface);
 
       const people = [...byKey.values()];
+      const account = deriveAccount(raw.planUsage || [], people, cutoff);
       for (const p of people) {
+        const orgs = p.accounts.map((a) => a.organization_uuid).filter(Boolean);
+        p.claudeAccount = p.accounts.find((a) => a.organization_uuid === account.organization) || p.accounts.find((a) => a.organization_uuid) || p.accounts[0] || null;
+        p.otherAccount = Boolean(account.organization) && orgs.length > 0 && !orgs.includes(account.organization);
         const sync = p.collector || p.meta;
         const lastSync = sync?.last_sync_at ? new Date(sync.last_sync_at).getTime() : 0;
         p.lastSync = sync?.last_sync_at || null;
@@ -565,7 +583,46 @@
       const projects = [...teamProjects.values()].sort((a, b) => b.tokens - a.tokens);
       const models = [...teamModels.values()].sort((a, b) => b.tokens - a.tokens);
       const issues = buildIssues(people);
-      return { range, today, cutoff, laneStart, people, byKey, ranked, total, prevTotal, cacheShare: total ? cacheTotal / total : 0, firstDay, projects, models, issues };
+      return { range, today, cutoff, laneStart, people, byKey, ranked, total, prevTotal, cacheShare: total ? cacheTotal / total : 0, firstDay, projects, models, issues, account };
+    }
+
+    // The shared account: the organization most collectors are signed in to, its usage % over the range, and how
+    // much of the 5-hour usage rose while no collector showed activity (claude.ai web or untracked machines).
+    function deriveAccount(planUsage, people, cutoff) {
+      const collectorsByOrg = new Map();
+      for (const p of people) for (const a of p.accounts) if (a.organization_uuid) {
+        if (!collectorsByOrg.has(a.organization_uuid)) collectorsByOrg.set(a.organization_uuid, new Set());
+        collectorsByOrg.get(a.organization_uuid).add(p.collector_id);
+      }
+      const sampleCounts = new Map();
+      for (const row of planUsage) bump(sampleCounts, row.organization_uuid, 1);
+      const organization = [...collectorsByOrg.entries()].sort((a, b) => b[1].size - a[1].size)[0]?.[0] || topEntry(sampleCounts)?.[0] || null;
+      const named = people.flatMap((p) => p.accounts).find((a) => a.organization_uuid === organization && a.organization_name);
+      const points = planUsage
+        .filter((row) => row.organization_uuid === organization && (!cutoff || new Date(row.bucket_at) >= cutoff))
+        .sort((a, b) => new Date(a.bucket_at) - new Date(b.bucket_at));
+
+      const BUFFER_MS = 10 * 60 * 1000;
+      const spans = people.flatMap((p) => p.allSessions)
+        .map((s) => [new Date(s.first_ts || s.last_ts).getTime() - BUFFER_MS, new Date(s.last_ts).getTime() + BUFFER_MS]);
+      const tracked = (from, to, row) => (row.sources || []).includes("statusline") || spans.some(([a, b]) => a <= to && b >= from);
+      let rise = 0;
+      let unattributed = 0;
+      for (let i = 1; i < points.length; i++) {
+        const delta = num(points[i].five_hour_pct) - num(points[i - 1].five_hour_pct);
+        if (delta <= 0) continue;
+        rise += delta;
+        if (!tracked(new Date(points[i - 1].bucket_at).getTime(), new Date(points[i].bucket_at).getTime(), points[i])) unattributed += delta;
+      }
+      const latest = points[points.length - 1] || null;
+      return {
+        organization,
+        name: named?.organization_name || (organization ? `Account ${organization.slice(0, 8)}` : ""),
+        collectors: collectorsByOrg.get(organization)?.size || 0,
+        points,
+        latest,
+        unattributedShare: rise ? unattributed / rise : null,
+      };
     }
 
     function reasonsFor(p) {
@@ -602,6 +659,9 @@
 
     function buildIssues(people) {
       const issues = [];
+      for (const p of people) {
+        if (p.otherAccount) issues.push({ tone: "warn", person: p, title: `${p.name} is signed in to a different Claude account`, detail: `${p.machine} uses ${p.claudeAccount?.organization_name || "another organization"}, so its usage is not the shared account's.`, seen: timeAgo(p.claudeAccount?.last_seen_at) });
+      }
       for (const p of people) {
         if (p.stale) issues.push({ tone: "bad", person: p, title: `${p.name}’s collector is stale`, detail: `No sync from ${p.machine} since ${timeAgo(p.lastSync)}. Usage after that isn’t counted yet.`, seen: timeAgo(p.lastSync) });
       }
@@ -743,9 +803,41 @@
     // ---------------------------------------------------------------------------
     // Rendering: Brief
     // ---------------------------------------------------------------------------
+    function renderAccountStrip() {
+      const { account } = model;
+      if (!account.latest) {
+        return `<section class="panel account-strip"><div class="stack" style="gap:4px;"><span class="kicker">Shared account</span><span style="font-size:13px;color:var(--ink-3);">No account usage % reported yet. It arrives from machines running Claude Desktop or with the collector’s statusline capture.</span></div></section>`;
+      }
+      const meter = (label, value, resets) => `
+        <div class="stack" style="gap:2px;">
+          <span style="display:flex;justify-content:space-between;gap:8px;font-size:13px;"><span>${label}</span><span class="mono">${value === null || value === undefined ? "—" : `${Math.round(num(value))}%`}</span></span>
+          <div class="meter"><div style="width:${Math.min(100, num(value))}%"></div></div>
+          ${resets ? `<span class="muted" style="font-size:12px;">Resets ${esc(new Date(resets).toLocaleString("en-US", { weekday: "short", hour: "numeric", minute: "2-digit" }))}</span>` : ""}
+        </div>`;
+      const series = account.points.slice(-120);
+      const peak = Math.max(1, ...series.map((row) => num(row.five_hour_pct)));
+      const spark = `<div class="spark" aria-hidden="true">${series.map((row) => `<div style="height:${Math.max(2, (num(row.five_hour_pct) / peak) * 100)}%"></div>`).join("")}</div>`;
+      const gap = account.unattributedShare;
+      const gapText = gap === null ? "Not enough samples in this range to compare with tracked activity."
+        : gap < 0.05 ? "Almost all of the account’s usage lines up with activity from tracked machines."
+        : `${pct(gap)} of the rise in 5-hour usage happened while no tracked machine was active (claude.ai web or a machine without the collector). Estimate.`;
+      return `
+        <section class="panel account-strip">
+          <div class="stack" style="gap:4px;">
+            <span class="kicker">Shared account · ${esc(account.name)}</span>
+            <span class="muted" style="font-size:12px;">${account.collectors} collector${account.collectors === 1 ? "" : "s"} signed in · as of ${esc(timeAgo(account.latest.bucket_at))}</span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;">
+            ${meter("5-hour limit", account.latest.five_hour_pct, account.latest.five_hour_resets_at)}
+            ${meter("7-day limit", account.latest.seven_day_pct, account.latest.seven_day_resets_at)}
+          </div>
+          <div class="stack" style="gap:6px;">${spark}<span class="muted" style="font-size:12px;">${esc(gapText)}</span></div>
+        </section>`;
+    }
+
     function renderBrief() {
       const { ranked, range } = model;
-      if (!ranked.length) return `<div class="empty">No Claude usage was recorded ${range.days ? `in the last ${range.days} days` : "yet"}.</div>`;
+      if (!ranked.length) return `<div class="empty">No Claude usage was recorded ${range.days ? `in the last ${range.days} days` : "yet"}.</div>${renderAccountStrip()}`;
       const top = ranked[0];
       const only = ranked.length === 1;
       const change = model.prevTotal ? (model.total - model.prevTotal) / model.prevTotal : null;
@@ -779,6 +871,7 @@
           </div>
           <aside class="ranking"><span class="kicker" style="margin-bottom:10px;">The ranking</span>${ranking}</aside>
         </section>
+        ${renderAccountStrip()}
         ${stories ? `<section class="stories">${stories}</section>` : ""}
         <footer class="brief-foot"><span>${also}</span><button class="link-btn" style="font-size:13px;color:var(--ink);text-decoration:underline;" data-action="tab" data-id="share">See it as shares</button></footer>`;
     }
@@ -1092,22 +1185,23 @@
     function renderSessions() {
       const rows = sessionRows();
       const filters = [["all", "All"], ["main", "Main"], ["sub", "Subagents"]].map(([id, label]) => `<button data-action="session-filter" data-id="${id}" aria-pressed="${state.sessionFilter === id}">${label}</button>`).join("");
-      const COLS = "minmax(0,1.3fr) minmax(0,1.5fr) minmax(0,1.6fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,1fr) minmax(0,1fr)";
+      const COLS = "minmax(0,1.2fr) minmax(0,1.3fr) minmax(0,1.4fr) minmax(0,1.2fr) minmax(0,0.9fr) minmax(0,0.8fr) minmax(0,0.8fr) minmax(0,1fr)";
       return `
         <div style="display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:16px;">
           <div class="seg" role="group" aria-label="Session type">${filters}</div>
           <span class="muted" style="font-size:12px;">Sorted by tokens · ${rows.length} session${rows.length === 1 ? "" : "s"}</span>
         </div>
         <div class="panel table">
-          <div class="trow head" style="grid-template-columns:${COLS}"><span>Session</span><span>Person</span><span>Project</span><span class="num">Tokens</span><span class="num">Duration</span><span class="num">Tokens / hr</span><span class="num">Last activity</span></div>
+          <div class="trow head" style="grid-template-columns:${COLS}"><span>Session</span><span>Person</span><span>Project</span><span>Branch</span><span>From</span><span class="num">Tokens</span><span class="num">Duration</span><span class="num">Last activity</span></div>
           ${rows.slice(0, 200).map(({ s, p }) => `
             <div class="trow clickable" style="grid-template-columns:${COLS}" ${personAction(p)}>
               <span style="display:flex;align-items:center;gap:8px;min-width:0;"><span class="mono ellipsis" style="font-size:12px;" title="${esc(s.session_id)}">${esc(String(s.session_id).slice(0, 8))}</span>${s.is_subagent ? `<span class="tag">subagent</span>` : ""}</span>
               <span class="ellipsis" style="font-size:13px;">${esc(p.name)}</span>
               <span class="mono ellipsis" style="font-size:12px;color:var(--ink-3);">${esc(s.project_name || s.project)}</span>
+              <span class="mono ellipsis" style="font-size:12px;color:var(--ink-3);" title="${esc(s.git_branch || "")}">${esc(s.git_branch || "—")}</span>
+              <span class="ellipsis" style="font-size:13px;color:var(--ink-3);">${esc(sessionOrigin(s) || "—")}</span>
               <span class="mono num" style="font-size:13px;">${compact(s.reported_total)}</span>
               <span class="mono num" style="font-size:13px;color:var(--ink-3);">${duration(s.duration_seconds)}</span>
-              <span class="mono num" style="font-size:13px;color:var(--ink-3);">${num(s.tokens_per_hour) ? compact(s.tokens_per_hour) : "—"}</span>
               <span class="num" style="font-size:13px;color:var(--ink-3);">${esc(timeAgo(s.last_ts))}</span>
             </div>`).join("") || `<div class="empty">No sessions in this range.</div>`}
           ${rows.length > 200 ? `<div class="empty" style="padding:16px;">Showing the 200 largest sessions.</div>` : ""}
@@ -1119,22 +1213,26 @@
       const surfaceCount = (surface) => collectors.filter((p) => p.surfaces.has(surface)).length;
       const stats = [
         ["Claude Code", surfaceCount("claude_code"), "exact token counts"],
-        ["Claude Desktop", new Set(collectors.filter((p) => p.surfaces.has("desktop_chat") || p.surfaces.has("desktop_app")).map((p) => p.key)).size, "activity only, no token counts"],
-        ["Cowork", surfaceCount("cowork"), "activity only, no token counts"],
-        ["Extensions", surfaceCount("extensions"), "configuration detected"],
+        ["Claude Desktop", collectors.filter((p) => ["desktop_chat", "desktop_app", "desktop_code"].some((s) => p.surfaces.has(s))).length, "chat is activity only; Code tab is exact"],
+        ["Cowork", surfaceCount("cowork"), "exact tokens where transcripts exist"],
+        ["Extensions", collectors.filter((p) => ["extensions", "ide_extension", "browser_extension"].some((s) => p.surfaces.has(s))).length, "IDE, Chrome, or Desktop extensions"],
       ].map(([label, value, note]) => `<div><span style="font-size:13px;color:var(--ink-3);">${label}</span><strong>${value}</strong><span class="muted" style="font-size:12px;">${value === 1 ? "collector" : "collectors"}, ${note}</span></div>`).join("");
-      const COLS = "minmax(0,1.6fr) minmax(0,1.4fr) minmax(0,0.8fr) minmax(0,1fr) minmax(0,1.6fr) minmax(0,1fr)";
+      const COLS = "minmax(0,1.5fr) minmax(0,1.5fr) minmax(0,1.1fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,1.4fr) minmax(0,1fr)";
+      const accountCell = (p) => p.claudeAccount
+        ? `<span class="stack"><span class="ellipsis" style="font-size:13px;">${esc(p.claudeAccount.organization_name || "Unnamed organization")}</span><span class="sub ellipsis" style="font-size:12px;">${p.otherAccount ? `<span class="badge">Different account</span>` : esc(String(p.claudeAccount.organization_uuid || p.claudeAccount.account_uuid).slice(0, 8))}</span></span>`
+        : `<span class="muted" style="font-size:12px;">Not reported</span>`;
       const tone = { bad: ["#fbe5e3", "#b42c2c"], warn: ["#fbefd5", "#9a5b00"] };
       return `
         <section class="panel stat-strip" style="margin-bottom:20px;">${stats}</section>
         <section class="panel table" style="margin-bottom:20px;">
           <div class="panel-head"><h2>Collectors</h2><span class="muted" style="font-size:12px;">A collector counts as stale after 2 hours without a sync</span></div>
-          <div class="trow head" style="grid-template-columns:${COLS}"><span>Machine</span><span>Platform</span><span>Version</span><span>Last sync</span><span>Surfaces found</span><span>Status</span></div>
+          <div class="trow head" style="grid-template-columns:${COLS}"><span>Machine</span><span>Claude account</span><span>Platform</span><span>Version</span><span>Last sync</span><span>Surfaces found</span><span>Status</span></div>
           ${collectors.map((p) => `
             <div class="trow clickable" style="grid-template-columns:${COLS}" ${personAction(p)}>
               <span class="stack"><span class="mono ellipsis" style="font-size:12px;">${esc(p.machine)}</span><span class="sub ellipsis" style="font-size:12px;">${esc(p.name)}</span></span>
+              ${accountCell(p)}
               <span class="ellipsis" style="font-size:13px;color:var(--ink-3);">${esc(platformLabel(p.platform) || "—")}</span>
-              <span class="mono" style="font-size:12px;color:var(--ink-3);">${esc(p.version || "—")}</span>
+              <span class="stack"><span class="mono" style="font-size:12px;color:var(--ink-3);">${esc(p.version || "—")}</span>${p.collector?.claude_code_version ? `<span class="sub mono" style="font-size:11px;">Code ${esc(p.collector.claude_code_version)}</span>` : ""}</span>
               <span style="font-size:13px;color:var(--ink-3);">${esc(timeAgo(p.lastSync))}</span>
               <span class="ellipsis" style="font-size:12px;color:var(--ink-3);">${esc(surfaceList(p.surfaces) || "—")}</span>
               ${p.meta || p.collector ? statusBadge(p) : `<span class="muted" style="font-size:12px;">No usage synced</span>`}
@@ -1206,7 +1304,9 @@
               </div>` : ""}
             ${list("Projects", sortedEntries(p.projects).slice(0, 6).map(([name, tokens]) => [name, compact(tokens)]), true)}
             ${list("Models", sortedEntries(p.models).slice(0, 4).map(([name, tokens]) => [name, compact(tokens)]), true)}
-            ${list("Collector", [["Account", p.account || "—"], ["Surfaces found", surfaces || "—"], ["Requests", int(p.requests)], ["Sessions in range", String(p.sessions.length)]], false)}
+            ${list("Branches", sortedEntries(p.sessions.reduce((map, s) => (s.git_branch ? bump(map, s.git_branch, num(s.reported_total)) : map), new Map())).slice(0, 5).map(([name, tokens]) => [name, compact(tokens)]), true)}
+            ${list("Skills and plugins", p.features.slice().sort((a, b) => num(b.count) - num(a.count)).slice(0, 6).map((f) => [`${f.name} (${f.kind})`, `${int(f.count)} uses`]), true)}
+            ${list("Collector", [["Claude account", p.claudeAccount ? `${p.claudeAccount.organization_name || "Unnamed"}${p.otherAccount ? " (different)" : ""}` : "Not reported"], ["Account label", p.account || "—"], ["Claude Code", [p.collector?.claude_code_version, p.collector?.install_method].filter(Boolean).join(" · ") || "—"], ["Surfaces found", surfaces || "—"], ["Requests", int(p.requests)], ["Sessions in range", String(p.sessions.length)]], false)}
           </div>
         </aside>`;
     }
@@ -1228,7 +1328,7 @@
         rows = model.projects.map((p) => ({ project: p.name, tokens: p.tokens, share: (p.tokens / (model.total || 1)).toFixed(4), people: p.people.size, cache_share: (p.tokens ? p.cache / p.tokens : 0).toFixed(4), requests: p.requests }));
       } else if (state.tab === "sessions") {
         name = "sessions";
-        rows = sessionRows().map(({ s, p }) => ({ session_id: s.session_id, person: p.name, machine: p.machine, project: s.project_name || s.project, subagent: s.is_subagent, tokens: s.reported_total, duration_seconds: s.duration_seconds, first_ts: s.first_ts, last_ts: s.last_ts }));
+        rows = sessionRows().map(({ s, p }) => ({ session_id: s.session_id, person: p.name, machine: p.machine, project: s.project_name || s.project, branch: s.git_branch || "", from: sessionOrigin(s), subagent: s.is_subagent, tokens: s.reported_total, duration_seconds: s.duration_seconds, first_ts: s.first_ts, last_ts: s.last_ts }));
       } else {
         rows = model.people.filter((p) => p.meta || p.tokens).map((p) => ({ person: p.name, machine: p.machine, account: p.account, tokens: p.tokens, share: p.share.toFixed(4), requests: p.requests, top_project: p.topProject, top_model: p.topModel, reasons: p.reasons.map((r) => r.text).join("; "), last_sync: p.lastSync || "", status: p.status.label }));
       }

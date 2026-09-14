@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from claude_usage.paths import ClaudePaths
 from claude_usage.transcripts import discover_jsonl, load_stats_cache
+from claude_usage.util import parse_ts, read_json_file
 
 
 def discover_anomalies(claude: ClaudePaths, paths: list[Path] | None = None) -> list[dict[str, str]]:
@@ -112,3 +113,33 @@ def sanitize_sync_anomalies(anomalies: list[dict[str, str]], claude: ClaudePaths
             "message": message,
         })
     return sanitized
+
+
+def plan_usage_anomalies(unknown_versions: list) -> list[dict[str, str]]:
+    if not unknown_versions:
+        return []
+    return [{
+        "code": "plan_usage_format_unknown",
+        "severity": "warn",
+        "message": f"Claude Desktop plan usage file has an unsupported format version ({', '.join(map(str, unknown_versions))}); account usage % from Desktop is skipped.",
+    }]
+
+
+def retention_anomalies(claude_dirs: list[Path], last_success_at: str | None) -> list[dict[str, str]]:
+    """Claude Code deletes transcripts after cleanupPeriodDays; warn before unsynced ones disappear."""
+    last_success = parse_ts(last_success_at)
+    if not last_success:
+        return []
+    anomalies = []
+    for claude_dir in claude_dirs:
+        period = read_json_file(claude_dir / "settings.json").get("cleanupPeriodDays", 30)
+        if not isinstance(period, (int, float)) or isinstance(period, bool):
+            continue
+        idle_days = (datetime.now(timezone.utc) - last_success).total_seconds() / 86400
+        if idle_days + 2 >= period:
+            anomalies.append({
+                "code": "transcripts_may_expire",
+                "severity": "warn",
+                "message": f"Claude Code keeps transcripts for {period:g} days and the last successful sync was {idle_days:.0f} days ago; older usage may be lost.",
+            })
+    return anomalies

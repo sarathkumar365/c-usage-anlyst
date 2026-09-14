@@ -1,5 +1,5 @@
 # Installs the Claude usage agent for the current Windows user.
-# Phases: Test-System -> Install-Runtime -> Invoke-Preflight -> Register-Agent -> Install-Scheduler -> Invoke-FirstSync
+# Phases: Test-System -> Install-Runtime -> Invoke-Preflight -> Register-Agent -> Install-Statusline -> Install-Scheduler -> Invoke-FirstSync
 param(
   [string]$IngestUrl = $(if ($env:INGEST_URL) { $env:INGEST_URL } else { "https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/ingest" }),
   [string]$CollectorToken = $env:COLLECTOR_TOKEN,
@@ -155,6 +155,14 @@ function Register-Agent {
   if ($LASTEXITCODE -ne 0) { Stop-Install "Agent enrollment failed" "Fix the error above, then rerun." }
 }
 
+function Install-Statusline {
+  if ($env:SKIP_STATUSLINE) {
+    Write-Check "WARN" "Usage % capture skipped (SKIP_STATUSLINE set)"
+    return
+  }
+  Invoke-Agent --install-statusline --claude-dir $ClaudeDir
+}
+
 function Install-Scheduler {
   if ($env:SKIP_SCHEDULER) {
     Write-Check "WARN" "Scheduler install skipped (SKIP_SCHEDULER set)"
@@ -186,5 +194,6 @@ Test-System
 Install-Runtime
 Invoke-Preflight
 Register-Agent
+Install-Statusline
 Install-Scheduler
 Invoke-FirstSync

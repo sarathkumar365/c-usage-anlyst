@@ -8,11 +8,14 @@ from claude_usage.discovery import SourceRecord
 from claude_usage.models import ActivityDaily
 from claude_usage.util import date_key, read_json_file
 
+DESKTOP_SESSION_EXTRACTORS = {"claude_desktop_code", "claude_desktop_cowork"}
+
 
 def extract_activity_daily(sources: list[SourceRecord]) -> list[ActivityDaily]:
     rows: dict[tuple[str, str, str, str], ActivityDaily] = {}
     for source in sources:
-        if source.status != "present" or source.confidence == "exact":
+        # Desktop session stores are counted per session by desktop_sessions.desktop_session_activity.
+        if source.status != "present" or source.confidence == "exact" or source.extractor in DESKTOP_SESSION_EXTRACTORS:
             continue
         day = date_key(source.latest_activity_at)
         if day == "unknown":
@@ -25,25 +28,7 @@ def extract_activity_daily(sources: list[SourceRecord]) -> list[ActivityDaily]:
             confidence=source.confidence,
         )
 
-        if source.extractor == "claude_desktop_cowork":
-            activity = rows[key]
-            path = Path(source.path)
-            json_paths = [path] if path.is_file() and path.suffix == ".json" else []
-            if path.is_dir():
-                json_paths = [p for p in path.rglob("*.json") if p.name != "scheduled-tasks.json"]
-            enabled_tools: set[str] = set()
-            for json_path in json_paths[:5000]:
-                meta = read_json_file(json_path)
-                try:
-                    activity.turns += int(meta.get("completedTurns") or 0)
-                except Exception:
-                    pass
-                tools = meta.get("enabledMcpTools")
-                if isinstance(tools, dict):
-                    enabled_tools.update(str(name) for name in tools)
-            activity.sessions += len(json_paths[:5000]) if json_paths else 1
-            activity.tool_calls += len(enabled_tools)
-        elif source.extractor == "claude_desktop_extensions":
+        if source.extractor == "claude_desktop_extensions":
             activity = rows[key]
             path = Path(source.path)
             if path.is_dir():

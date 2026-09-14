@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+from claude_usage.accounts import read_accounts
 from claude_usage.anomalies import discover_anomalies
 from claude_usage.constants import APP_VERSION
 from claude_usage.flows.discover import run_discovery
 from claude_usage.identity import collect_identity
-from claude_usage.paths import ClaudePaths, config_path
+from claude_usage.paths import ClaudePaths, claude_config_dirs, config_path, desktop_data_dirs, statusline_samples_path, statusline_script_path
+from claude_usage.plan_usage import read_desktop_samples, read_statusline_samples
 from claude_usage.reports.sources import confidence_rank
 from claude_usage.store import load_config, load_state
 from claude_usage.ui import fmt_int, plain_metric, plain_section, plain_status, c
+from claude_usage.util import read_json_file
 
 SOURCE_LABELS = {
     "argument": "from --claude-dir",
@@ -17,6 +20,10 @@ SOURCE_LABELS = {
     "CLAUDE_CONFIG_DIR": "from CLAUDE_CONFIG_DIR",
     "default": "default",
 }
+
+
+def _pct(value: float | None) -> str:
+    return f"{value:g}%" if value is not None else "n/a"
 
 
 def print_status(claude: ClaudePaths):
@@ -41,6 +48,24 @@ def print_status(claude: ClaudePaths):
     plain_metric("Hostname", identity["hostname"], "", "info")
     plain_metric("Platform", f"{identity['platform']['system']} {identity['platform']['release']}", identity["platform"]["machine"], "info")
     plain_metric("Machine ID", identity["machine_id"], "hashed fingerprint", "info")
+
+    plain_section("Claude Account")
+    claude_dirs = claude_config_dirs(claude)
+    desktop_dirs = desktop_data_dirs()
+    accounts = read_accounts(claude_dirs, desktop_dirs)
+    for account in accounts:
+        plain_metric("Account", account.organization_name or "unknown organization", f"{account.account_uuid[:8]} via {account.source}", "good")
+    if not accounts:
+        plain_metric("Account", "not found", "no signed-in Claude account on this machine", "warn")
+    samples, _ = read_desktop_samples(desktop_dirs)
+    samples += read_statusline_samples(statusline_samples_path(), "")
+    latest = max(samples, key=lambda sample: sample.sampled_at, default=None)
+    if latest:
+        plain_metric("Plan usage", f"5h {_pct(latest.five_hour_pct)} · 7d {_pct(latest.seven_day_pct)}", f"{latest.source} at {latest.sampled_at}", "info")
+    else:
+        plain_metric("Plan usage", "no samples", "needs Claude Desktop or --install-statusline", "warn")
+    captured = any(str(statusline_script_path()) in str(read_json_file(d / "settings.json").get("statusLine")) for d in claude_dirs)
+    plain_metric("Usage % capture", "installed" if captured else "not installed", "Claude Code statusline", "good" if captured else "warn")
 
     plain_section("Claude Data")
     plain_metric("Claude dir", str(claude.claude_dir), SOURCE_LABELS[claude.source], "info")

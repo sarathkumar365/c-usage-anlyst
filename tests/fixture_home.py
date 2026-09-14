@@ -8,10 +8,16 @@ from pathlib import Path
 FIXED_MTIME = 1_788_000_000  # 2026-08-29T12:00:00Z
 SESSION_ID = "11111111-2222-3333-4444-555555555555"
 PROJECT_DIR = "-Users-test-work-demo"
+ACCOUNT_UUID = "aaaaaaaa-1111-2222-3333-444444444444"
+ORG_UUID = "bbbbbbbb-1111-2222-3333-444444444444"
+COWORK_SESSION_ID = "cccccccc-1111-2222-3333-444444444444"
+EMAIL = "Owner@Example.com"
+SECRET_TITLE = "Fixture secret session title"
 
 
-def _assistant(request_id: str, ts: str, usage: dict, *, model: str = "claude-opus-5", stop: str | None = "end_turn", content=None) -> dict:
+def _assistant(request_id: str, ts: str, usage: dict, *, model: str = "claude-opus-5", stop: str | None = "end_turn", content=None, **line) -> dict:
     return {
+        **line,
         "type": "assistant",
         "timestamp": ts,
         "requestId": request_id,
@@ -40,7 +46,8 @@ def build_fixture_home(root: Path) -> Path:
     project = claude / "projects" / PROJECT_DIR
 
     _write_jsonl(project / f"{SESSION_ID}.jsonl", [
-        {"type": "user", "timestamp": "2026-08-20T10:00:00Z", "message": {"role": "user", "content": "hi"}},
+        {"type": "user", "timestamp": "2026-08-20T10:00:00Z", "gitBranch": "feature/login", "entrypoint": "cli", "version": "2.1.200",
+         "message": {"role": "user", "content": "hi"}},
         _assistant("req_a", "2026-08-20T10:00:05Z", {"input_tokens": 10, "output_tokens": 1}, stop=None),
         _assistant("req_a", "2026-08-20T10:00:09Z", {
             "input_tokens": 12,
@@ -58,7 +65,12 @@ def build_fixture_home(root: Path) -> Path:
             "input_tokens": 3,
             "output_tokens": 50,
             "cache_read_input_tokens": 1_000,
-        }, model="claude-sonnet-5", content=[{"type": "tool_use", "name": "Bash"}]),
+        }, model="claude-sonnet-5", content=[{"type": "tool_use", "name": "Bash"}], version="2.1.210"),
+    ])
+    # A resumed session copies earlier responses into a new file, and a sidechain replays one again.
+    _write_jsonl(project / "99999999-2222-3333-4444-555555555555.jsonl", [
+        _assistant("req_b", "2026-08-21T15:30:00Z", {"input_tokens": 3, "output_tokens": 50, "cache_read_input_tokens": 1_000}, model="claude-sonnet-5"),
+        _assistant("req_b", "2026-08-21T15:30:00Z", {"input_tokens": 3, "output_tokens": 50, "cache_read_input_tokens": 1_000}, model="claude-sonnet-5", isSidechain=True),
     ])
     _write_jsonl(project / SESSION_ID / "subagents" / "agent-abc123.jsonl", [
         _assistant("req_sub", "2026-08-20T10:05:00Z", {"input_tokens": 4, "output_tokens": 20}, stop=None),
@@ -73,13 +85,49 @@ def build_fixture_home(root: Path) -> Path:
         "dailyModelTokens": [{"date": "2026-08-01", "tokensByModel": {"claude-opus-5": 1234}}],
     }), encoding="utf-8")
     (claude / "history.jsonl").write_text("{}\n", encoding="utf-8")
+    (home / ".claude.json").write_text(json.dumps({
+        "installMethod": "native",
+        "firstStartTime": "2026-01-02T03:04:05Z",
+        "numStartups": 7,
+        "oauthAccount": {
+            "accountUuid": ACCOUNT_UUID,
+            "organizationUuid": ORG_UUID,
+            "organizationName": f"{EMAIL}'s Organization",
+            "emailAddress": EMAIL,
+            "billingType": "stripe_subscription",
+            "userRateLimitTier": "default_claude_max_20x",
+        },
+        "skillUsage": {"pdf": {"usageCount": 3, "lastUsedAt": 1}},
+        "pluginUsage": {"github": {"usageCount": 2, "lastUsedAt": 1}},
+    }), encoding="utf-8")
+    (claude / "settings.json").write_text(json.dumps({"cleanupPeriodDays": 30}), encoding="utf-8")
+    (home / ".vscode" / "extensions" / "anthropic.claude-code-2.1.200-darwin-arm64").mkdir(parents=True)
+    (home / "Library" / "Application Support" / "Google" / "Chrome" / "Default" / "Extensions" / "fcoeoabgfenejglbffodgkkbkcdhcgfn").mkdir(parents=True)
 
     # Desktop data in both the macOS and Linux locations; each platform only scans its own.
     for support in (home / "Library" / "Application Support" / "Claude", home / ".config" / "Claude"):
-        cowork = support / "claude-code-sessions" / "workspace" / "session"
+        code = support / "claude-code-sessions" / ACCOUNT_UUID / ORG_UUID
+        code.mkdir(parents=True)
+        (code / "local_1.json").write_text(json.dumps({
+            "cliSessionId": SESSION_ID, "model": "claude-opus-5", "effort": "high", "completedTurns": 4,
+            "createdAt": 1_787_220_000_000, "lastActivityAt": 1_787_227_200_000, "title": SECRET_TITLE,
+            "enabledMcpTools": {"a": True, "b": True},
+        }), encoding="utf-8")
+        (code / "scheduled-tasks.json").write_text("{}", encoding="utf-8")
+        cowork = support / "local-agent-mode-sessions" / ACCOUNT_UUID / ORG_UUID
         cowork.mkdir(parents=True)
-        (cowork / "local_1.json").write_text(json.dumps({"completedTurns": 4, "enabledMcpTools": {"a": True, "b": True}}), encoding="utf-8")
-        (cowork / "scheduled-tasks.json").write_text("{}", encoding="utf-8")
+        (cowork / "local_2.json").write_text(json.dumps({
+            "cliSessionId": COWORK_SESSION_ID, "completedTurns": 2, "lastActivityAt": 1_787_313_600_000, "title": SECRET_TITLE,
+        }), encoding="utf-8")
+        _write_jsonl(cowork / "local_2" / ".claude" / "projects" / "-sessions-fixture" / f"{COWORK_SESSION_ID}.jsonl", [
+            _assistant("req_cowork", "2026-08-22T09:00:00Z", {"input_tokens": 7, "output_tokens": 70}, entrypoint="claude-desktop"),
+        ])
+        (support / "config.json").write_text(json.dumps({"lastKnownAccountUuid": ACCOUNT_UUID}), encoding="utf-8")
+        (support / "plan-usage-history.json").write_text(json.dumps({"version": 2, "samples": [
+            {"t": 1_787_220_000_000, "org": ORG_UUID, "u": {"fh": 10, "sd": 40}},
+            {"t": 1_787_220_900_000, "org": ORG_UUID, "u": {"fh": 25, "sd": 41, "xu": 0}},
+            {"t": 1_787_221_800_000, "org": ORG_UUID, "u": {"fh": 31, "sd": 42}},
+        ]}), encoding="utf-8")
         (support / "IndexedDB" / "https_claude.ai_0.indexeddb.leveldb").mkdir(parents=True)
         (support / "IndexedDB" / "https_claude.ai_0.indexeddb.leveldb" / "000003.log").write_text("x", encoding="utf-8")
         (support / "claude_desktop_config.json").write_text(json.dumps({"mcpServers": {}, "theme": "dark"}), encoding="utf-8")

@@ -13,6 +13,7 @@ from claude_usage.flows.collect import UsageQuery, collect_usage
 from claude_usage.flows.discover import run_discovery
 from claude_usage.flows.preflight import run_preflight
 from claude_usage.flows.status import print_status
+from claude_usage.flows.statusline import install_statusline, uninstall_statusline
 from claude_usage.flows.sync import run_sync
 from claude_usage.paths import resolve_claude_paths
 from claude_usage.reports.export import export_csv, export_json
@@ -44,6 +45,10 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Save collector configuration for background/team sync.")
     commands.add_argument("--sync", action="store_true",
                           help="Upload metrics-only usage payload to the configured ingest endpoint.")
+    commands.add_argument("--install-statusline", action="store_true",
+                          help="Capture the account's usage % from Claude Code's statusline (keeps any existing statusline).")
+    commands.add_argument("--uninstall-statusline", action="store_true",
+                          help="Remove the usage % capture and restore the previous statusline.")
 
     filters = parser.add_argument_group("filters (reports and --sync)")
     filters.add_argument("--days", type=int, default=None, help="Only analyze the last N days.")
@@ -133,6 +138,12 @@ def dispatch(args: argparse.Namespace) -> int:
     if args.status:
         print_status(claude)
         return 0
+
+    if args.install_statusline:
+        return install_statusline(claude)
+
+    if args.uninstall_statusline:
+        return uninstall_statusline(claude)
 
     if args.preflight:
         return run_preflight(claude, release_asset_url=args.release_asset_url,

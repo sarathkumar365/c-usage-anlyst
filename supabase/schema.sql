@@ -197,6 +197,12 @@ alter table usage_daily add column if not exists surface text not null default '
 alter table usage_daily add column if not exists confidence text not null default 'exact';
 alter table usage_sessions add column if not exists surface text not null default 'claude_code';
 alter table usage_sessions add column if not exists confidence text not null default 'exact';
+alter table usage_sessions add column if not exists git_branch text;
+alter table usage_sessions add column if not exists entrypoints text[] not null default '{}';
+alter table usage_sessions add column if not exists claude_code_version text;
+alter table usage_sessions add column if not exists desktop_surface text;
+alter table usage_sessions add column if not exists desktop_effort text;
+alter table usage_sessions add column if not exists completed_turns integer;
 
 create table if not exists identity_aliases (
   org_id text not null references organizations(id) on delete cascade,
@@ -206,6 +212,54 @@ create table if not exists identity_aliases (
   notes text,
   updated_at timestamptz not null default now(),
   primary key (org_id, entity_type, entity_id)
+);
+
+create table if not exists claude_accounts (
+  org_id text not null references organizations(id) on delete cascade,
+  collector_id text not null,
+  machine_id text not null,
+  user_id text not null,
+  account_uuid text not null,
+  organization_uuid text,
+  organization_name text,
+  email_hash text,
+  billing_type text,
+  seat_tier text,
+  user_rate_limit_tier text,
+  organization_rate_limit_tier text,
+  has_extra_usage boolean,
+  source text not null default '',
+  first_seen_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
+  primary key (org_id, collector_id, machine_id, user_id, account_uuid)
+);
+
+create table if not exists collector_features (
+  org_id text not null references organizations(id) on delete cascade,
+  collector_id text not null,
+  machine_id text not null,
+  user_id text not null,
+  kind text not null,
+  name text not null,
+  count integer not null default 0,
+  updated_at timestamptz not null default now(),
+  primary key (org_id, collector_id, machine_id, user_id, kind, name)
+);
+
+create table if not exists plan_usage_samples (
+  org_id text not null references organizations(id) on delete cascade,
+  organization_uuid text not null,
+  collector_id text not null,
+  source text not null,
+  sampled_at timestamptz not null,
+  machine_id text not null,
+  user_id text not null,
+  five_hour_pct numeric,
+  seven_day_pct numeric,
+  extra_usage numeric,
+  five_hour_resets_at timestamptz,
+  seven_day_resets_at timestamptz,
+  primary key (org_id, organization_uuid, collector_id, source, sampled_at)
 );
 
 -- ============================================================================
@@ -225,6 +279,9 @@ alter table usage_anomalies enable row level security;
 alter table usage_sources enable row level security;
 alter table usage_activity_daily enable row level security;
 alter table identity_aliases enable row level security;
+alter table claude_accounts enable row level security;
+alter table collector_features enable row level security;
+alter table plan_usage_samples enable row level security;
 
 create index if not exists usage_daily_org_day_idx on usage_daily(org_id, day desc);
 create index if not exists usage_daily_user_idx on usage_daily(org_id, user_id, day desc);
@@ -233,6 +290,8 @@ create index if not exists usage_anomalies_seen_idx on usage_anomalies(org_id, l
 create index if not exists usage_sources_seen_idx on usage_sources(org_id, latest_activity_at desc);
 create index if not exists usage_activity_daily_org_day_idx on usage_activity_daily(org_id, day desc);
 create index if not exists collector_runs_identity_seen_idx on collector_runs(org_id, user_id, machine_id, collector_id, received_at desc);
+create index if not exists claude_accounts_seen_idx on claude_accounts(org_id, last_seen_at desc);
+create index if not exists plan_usage_samples_time_idx on plan_usage_samples(org_id, organization_uuid, sampled_at desc);
 
 -- ============================================================================
 -- Access helpers and policies (members read; admins manage aliases; no client writes)
@@ -337,6 +396,21 @@ drop policy if exists "admins can delete identity aliases" on identity_aliases;
 create policy "admins can delete identity aliases"
 on identity_aliases for delete
 using (is_org_admin(org_id));
+
+drop policy if exists "members can read claude accounts" on claude_accounts;
+create policy "members can read claude accounts"
+on claude_accounts for select
+using (is_org_member(org_id));
+
+drop policy if exists "members can read collector features" on collector_features;
+create policy "members can read collector features"
+on collector_features for select
+using (is_org_member(org_id));
+
+drop policy if exists "members can read plan usage samples" on plan_usage_samples;
+create policy "members can read plan usage samples"
+on plan_usage_samples for select
+using (is_org_member(org_id));
 
 -- ============================================================================
 -- Dashboard read model
@@ -573,7 +647,13 @@ select
   s.models,
   s.reported_total,
   s.cache_read_input_tokens + s.cache_creation_input_tokens as cache_tokens,
-  s.tool_calls
+  s.tool_calls,
+  s.git_branch,
+  s.entrypoints,
+  s.claude_code_version,
+  s.desktop_surface,
+  s.desktop_effort,
+  s.completed_turns
 from usage_sessions s;
 
 create or replace view dashboard_sources
@@ -682,10 +762,12 @@ select
   r.collector_version,
   r.received_at as last_sync_at,
   coalesce((r.summary ->> 'requests')::bigint, 0) as last_requests,
-  coalesce((r.summary ->> 'transcript_files')::bigint, 0) as last_transcript_files
+  coalesce((r.summary ->> 'transcript_files')::bigint, 0) as last_transcript_files,
+  r.payload -> 'install' ->> 'install_method' as install_method,
+  r.payload -> 'install' ->> 'claude_code_version' as claude_code_version
 from (
   select distinct on (org_id, collector_id, machine_id, user_id, account_label)
-    org_id, collector_id, machine_id, user_id, account_label, collector_version, received_at, summary
+    org_id, collector_id, machine_id, user_id, account_label, collector_version, received_at, summary, payload
   from collector_runs
   order by org_id, collector_id, machine_id, user_id, account_label, received_at desc
 ) r
@@ -693,6 +775,52 @@ left join machine_users mu
   on mu.org_id = r.org_id and mu.user_id = r.user_id and mu.machine_id = r.machine_id
 left join machines m
   on m.org_id = r.org_id and m.machine_id = r.machine_id;
+
+-- Claude accounts each collector identity is signed in to.
+create or replace view dashboard_accounts
+with (security_invoker = true)
+as
+select
+  a.org_id,
+  a.collector_id,
+  a.machine_id,
+  a.user_id,
+  a.account_uuid,
+  a.organization_uuid,
+  a.organization_name,
+  a.email_hash,
+  a.billing_type,
+  a.user_rate_limit_tier,
+  a.organization_rate_limit_tier,
+  a.has_extra_usage,
+  a.source,
+  a.first_seen_at,
+  a.last_seen_at
+from claude_accounts a;
+
+create or replace view dashboard_features
+with (security_invoker = true)
+as
+select org_id, collector_id, machine_id, user_id, kind, name, count, updated_at
+from collector_features;
+
+-- Account-wide usage % in 5-minute buckets; every machine on the account reports the same series.
+create or replace view dashboard_plan_usage
+with (security_invoker = true)
+as
+select
+  org_id,
+  organization_uuid,
+  to_timestamp(floor(extract(epoch from sampled_at) / 300) * 300) as bucket_at,
+  max(five_hour_pct) as five_hour_pct,
+  max(seven_day_pct) as seven_day_pct,
+  max(extra_usage) as extra_usage,
+  max(five_hour_resets_at) as five_hour_resets_at,
+  max(seven_day_resets_at) as seven_day_resets_at,
+  array_agg(distinct collector_id) as collector_ids,
+  array_agg(distinct source) as sources
+from plan_usage_samples
+group by org_id, organization_uuid, to_timestamp(floor(extract(epoch from sampled_at) / 300) * 300);
 
 -- ============================================================================
 -- Grants
@@ -709,6 +837,9 @@ revoke all on dashboard_sources from anon, authenticated;
 revoke all on dashboard_activity_daily from anon, authenticated;
 revoke all on dashboard_person_tools from anon, authenticated;
 revoke all on dashboard_collectors from anon, authenticated;
+revoke all on dashboard_accounts from anon, authenticated;
+revoke all on dashboard_features from anon, authenticated;
+revoke all on dashboard_plan_usage from anon, authenticated;
 
 grant select, insert, update, delete on identity_aliases to authenticated;
 grant select on dashboard_people_usage to authenticated;
@@ -720,6 +851,9 @@ grant select on dashboard_sources to authenticated;
 grant select on dashboard_activity_daily to authenticated;
 grant select on dashboard_person_tools to authenticated;
 grant select on dashboard_collectors to authenticated;
+grant select on dashboard_accounts to authenticated;
+grant select on dashboard_features to authenticated;
+grant select on dashboard_plan_usage to authenticated;
 
 -- ============================================================================
 -- Admin functions (service role only)

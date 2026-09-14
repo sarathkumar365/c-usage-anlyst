@@ -40,6 +40,12 @@ class RequestUsage:
     stop_reason: str | None = None
     parent_uuid: str | None = None
 
+    surface: str = "claude_code"
+    is_sidechain: bool = False
+    git_branch: str | None = None
+    entrypoint: str | None = None
+    claude_code_version: str | None = None
+
     @property
     def reported_total(self) -> int:
         return (
@@ -72,6 +78,10 @@ class SessionSummary:
     cache_1h: int
     reported_total: int
     models: dict[str, int]
+    surface: str = "claude_code"
+    git_branch: str | None = None
+    entrypoints: tuple[str, ...] = ()
+    claude_code_version: str | None = None
 
     @property
     def duration_seconds(self) -> float:
@@ -98,3 +108,48 @@ class ActivityDaily:
     tool_calls: int = 0
     reported_total: int = 0
     confidence: str = "evidence"
+
+
+@dataclass
+class AccountSnapshot:
+    account_uuid: str
+    organization_uuid: str | None = None
+    organization_name: str | None = None
+    email_hash: str | None = None
+    billing_type: str | None = None
+    seat_tier: str | None = None
+    user_rate_limit_tier: str | None = None
+    organization_rate_limit_tier: str | None = None
+    has_extra_usage: bool | None = None
+    source: str = ""
+
+
+@dataclass
+class FeatureUsage:
+    kind: str
+    name: str
+    count: int
+
+
+@dataclass
+class PlanUsageSample:
+    sampled_at: str
+    organization_uuid: str
+    source: str
+    five_hour_pct: float | None = None
+    seven_day_pct: float | None = None
+    extra_usage: float | None = None
+    five_hour_resets_at: str | None = None
+    seven_day_resets_at: str | None = None
+
+
+@dataclass
+class DesktopSession:
+    cli_session_id: str
+    surface: str
+    model: str | None = None
+    effort: str | None = None
+    completed_turns: int = 0
+    created_at: str | None = None
+    last_activity_at: str | None = None
+    is_archived: bool = False

@@ -4,7 +4,7 @@ Findings from a code review on 2026-09-14 (working tree based on `b31a8ea` plus 
 
 Status values: `open`, `in-progress`, `fixed`, `deferred`, `wontfix`, `unverified`.
 
-`deferred` = accepted while in development; revisit before onboarding real users. KI-07/08/15 skew dashboard totals upward — check them first if numbers look high.
+`deferred` = accepted while in development; revisit before onboarding real users. KI-07/08 skew dashboard totals upward — check them first if numbers look high.
 
 | ID | Severity | Area | Title | Status |
 |----|----------|------|-------|--------|
@@ -14,7 +14,7 @@ Status values: `open`, `in-progress`, `fixed`, `deferred`, `wontfix`, `unverifie
 | KI-04 | High | Data integrity | Idempotency key never repeats; `collector_runs` grows unbounded | fixed |
 | KI-05 | High | Data integrity | Partial ingest failure permanently drops data | fixed |
 | KI-06 | High | Data integrity | Hostname change forks machine/user IDs and double-counts | fixed |
-| KI-07 | Medium | Data integrity | Activity rows accumulate across days | deferred |
+| KI-07 | Medium | Data integrity | Activity rows accumulate across days | partially fixed |
 | KI-08 | Medium | Discovery | False-positive sources from generic metadata names | deferred |
 | KI-09 | High | Release | Untracked `claude_usage/` package breaks builds and Python fallback | fixed |
 | KI-10 | Low | Collector | Preflight "Last sync" always shows "never" | fixed |
@@ -23,7 +23,7 @@ Status values: `open`, `in-progress`, `fixed`, `deferred`, `wontfix`, `unverifie
 | KI-13 | Low | Ingest | Malformed JSON returns unhandled 500 | fixed |
 | KI-14 | Low | Repo hygiene | Committed plist contains a developer-local path | fixed |
 | KI-16 | Medium | Data integrity | Subagent transcripts merged into parent sessions | fixed |
-| KI-15 | Unknown | Data integrity | Cross-file request duplication may double-count | unverified |
+| KI-15 | High | Data integrity | Cross-file request duplication double-counts | fixed |
 
 ---
 
@@ -85,6 +85,7 @@ Status values: `open`, `in-progress`, `fixed`, `deferred`, `wontfix`, `unverifie
 - **Problem:** Each source's entire cumulative activity is assigned to the day of its latest mtime. When the mtime advances, a new day row is upserted and the old row remains.
 - **Impact:** `dashboard_activity_daily` totals inflate over time. Also: `messages` is actually a file count, and Cowork `tool_calls` is the count of *enabled* MCP tools, not calls.
 - **Fix direction:** Bucket by per-file mtime (or per-session timestamps), or send snapshot semantics and replace rows per source. Rename or re-derive misleading metrics.
+- **Partially fixed (v0.7.0):** Desktop Code tab and Cowork activity now comes from session records, counted on each session's last-activity day (`desktop_sessions.py`), and the enabled-MCP-tool count is gone. Other Desktop/extension sources still use the latest-mtime day.
 
 ## KI-08 — False-positive sources from generic metadata names
 
@@ -142,11 +143,13 @@ Status values: `open`, `in-progress`, `fixed`, `deferred`, `wontfix`, `unverifie
 - **Impact:** Subagent work was invisible and parent sessions were inflated, so "why usage is high" could never cite subagents.
 - **Resolution (2026-09-14):** Subagent sessions are keyed `<parent>:<agent-id>` (test: `test_subagent_transcripts_are_separate_sessions`). Existing merged parent rows correct themselves on the next sync; subagent rows appear alongside.
 
-## KI-15 — Cross-file request duplication may double-count (unverified)
+## KI-15 — Cross-file request duplication double-counts
 
 - **File:** `claude_usage_analyzer.py` `parse_all`
 - **Problem:** Request IDs are deduplicated only within a single JSONL file. If resumed/forked sessions copy prior assistant messages into a new file, those tokens are counted twice.
 - **Verify:** Check for repeated `message.id` across files in a real `~/.claude/projects` tree. If present, dedup globally by request ID.
+- **Confirmed (2026-09-14):** on the maintainer's Mac, 1,399 of 7,152 responses appeared in more than one file. The 90-day sync total fell from 2.63B to 2.09B tokens once deduplicated (549M, about 21% overcounted). The rows that only held copies were deleted from `usage_sessions`/`usage_daily` for that collector, with copies kept in `backup_20260914.stale_*_v070`. Other collectors are corrected when they update to 0.7.0.
+- **Fixed (v0.7.0):** `transcripts.dedupe_requests` keeps one request per response ID across all files and Claude dirs, preferring the non-sidechain, finalized copy from the older file.
 
 ---
 

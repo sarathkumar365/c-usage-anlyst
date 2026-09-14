@@ -30,7 +30,100 @@ type UsagePayload = {
   sources?: Row[];
   activity_daily?: Row[];
   anomalies: Array<{ code: string; severity: string; message: string }>;
+  accounts?: Row[];
+  install?: Row;
+  feature_usage?: Row[];
+  plan_usage?: Row[];
 };
+
+// Payload arrays and the columns ingest may write from them. Unknown keys are dropped, so an older
+// schema never fails an upsert because a newer collector sent an extra field.
+type TableSpec = {
+  table: string;
+  rows: (payload: UsagePayload) => Row[] | undefined;
+  columns: string[];
+  // Payload columns that, with the identity columns, form the primary key.
+  key: string[];
+  accountLabel: boolean;
+  stamp?: "updated_at" | "last_seen_at";
+};
+
+const TOKEN_COLUMNS = [
+  "input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens",
+  "cache_5m_tokens", "cache_1h_tokens", "reported_total", "tool_calls",
+];
+
+const TABLES: TableSpec[] = [
+  {
+    table: "usage_daily",
+    rows: (p) => p.daily,
+    columns: ["day", "surface", "confidence", "project", "project_name", "model", "requests", "finalized_requests",
+      "incomplete_requests", ...TOKEN_COLUMNS, "web_search_requests", "web_fetch_requests"],
+    key: ["day", "project", "model"],
+    accountLabel: true,
+    stamp: "updated_at",
+  },
+  {
+    table: "usage_sessions",
+    rows: (p) => p.sessions,
+    columns: ["session_id", "surface", "confidence", "project", "project_name", "is_subagent", "agent_id", "first_ts",
+      "last_ts", "duration_seconds", "tokens_per_hour", "requests", "finalized_requests", "incomplete_requests", "models",
+      ...TOKEN_COLUMNS, "git_branch", "entrypoints", "claude_code_version", "desktop_surface", "desktop_effort",
+      "completed_turns"],
+    key: ["session_id"],
+    accountLabel: true,
+    stamp: "updated_at",
+  },
+  {
+    table: "usage_sources",
+    rows: (p) => p.sources,
+    columns: ["source_id", "surface", "status", "confidence", "path_hash", "file_count", "latest_activity_at", "extractor", "anomalies"],
+    key: ["source_id"],
+    accountLabel: true,
+    stamp: "updated_at",
+  },
+  {
+    table: "usage_activity_daily",
+    rows: (p) => p.activity_daily,
+    columns: ["day", "surface", "source_id", "sessions", "messages", "turns", "tool_calls", "reported_total", "confidence"],
+    key: ["day", "surface", "source_id"],
+    accountLabel: true,
+    stamp: "updated_at",
+  },
+  {
+    table: "usage_anomalies",
+    rows: (p) => p.anomalies,
+    columns: ["code", "severity", "message"],
+    key: ["code"],
+    accountLabel: false,
+    stamp: "last_seen_at",
+  },
+  {
+    table: "claude_accounts",
+    rows: (p) => p.accounts,
+    columns: ["account_uuid", "organization_uuid", "organization_name", "email_hash", "billing_type", "seat_tier",
+      "user_rate_limit_tier", "organization_rate_limit_tier", "has_extra_usage", "source"],
+    key: ["account_uuid"],
+    accountLabel: false,
+    stamp: "last_seen_at",
+  },
+  {
+    table: "collector_features",
+    rows: (p) => p.feature_usage,
+    columns: ["kind", "name", "count"],
+    key: ["kind", "name"],
+    accountLabel: false,
+    stamp: "updated_at",
+  },
+  {
+    table: "plan_usage_samples",
+    rows: (p) => p.plan_usage,
+    columns: ["organization_uuid", "source", "sampled_at", "five_hour_pct", "seven_day_pct", "extra_usage",
+      "five_hour_resets_at", "seven_day_resets_at"],
+    key: ["organization_uuid", "source", "sampled_at"],
+    accountLabel: false,
+  },
+];
 
 type TokenRow = {
   org_id: string;
@@ -121,13 +214,6 @@ async function markDuplicateSeen(supabase: SupabaseClient, payload: UsagePayload
 
 async function writeUsage(supabase: SupabaseClient, orgId: string, payload: UsagePayload, now: string) {
   const identity = payload.identity;
-  const scope = {
-    org_id: orgId,
-    collector_id: identity.collector_id,
-    machine_id: identity.machine_id,
-    user_id: identity.user_id,
-  };
-  const scoped = { ...scope, account_label: identity.account_label || "", updated_at: now };
 
   check((await supabase.from("machines").upsert({
     org_id: orgId,
@@ -147,33 +233,39 @@ async function writeUsage(supabase: SupabaseClient, orgId: string, payload: Usag
     last_seen_at: now,
   })).error);
 
-  const tables: Array<[string, Row[] | undefined]> = [
-    ["usage_daily", payload.daily],
-    ["usage_sessions", payload.sessions],
-    ["usage_sources", payload.sources],
-    ["usage_activity_daily", payload.activity_daily],
-  ];
-  for (const [table, rows] of tables) {
+  for (const spec of TABLES) {
+    const rows = spec.rows(payload);
     if (!Array.isArray(rows) || !rows.length) continue;
-    // Server-owned identity columns are spread last so the payload cannot override them.
-    check((await supabase.from(table).upsert(rows.map((row) => ({ ...row, ...scoped })))).error);
+    check((await supabase.from(spec.table).upsert(scopedRows(spec, rows, identity, orgId, now))).error);
   }
+}
 
-  if (Array.isArray(payload.anomalies) && payload.anomalies.length) {
-    check((await supabase.from("usage_anomalies").upsert(payload.anomalies.map((row) => ({
-      ...scope,
-      code: row.code,
-      severity: row.severity,
-      message: row.message,
-      last_seen_at: now,
-    })))).error);
+// Whitelisted columns plus server-owned identity, one row per primary key (a repeated key would fail the upsert).
+function scopedRows(spec: TableSpec, rows: Row[], identity: UsagePayload["identity"], orgId: string, now: string): Row[] {
+  const byKey = new Map<string, Row>();
+  for (const row of rows) {
+    const clean: Row = {};
+    for (const column of spec.columns) if (column in row) clean[column] = row[column];
+    Object.assign(clean, {
+      org_id: orgId,
+      collector_id: identity.collector_id,
+      machine_id: identity.machine_id,
+      user_id: identity.user_id,
+      ...(spec.accountLabel ? { account_label: identity.account_label || "" } : {}),
+      ...(spec.stamp ? { [spec.stamp]: now } : {}),
+    });
+    byKey.set(JSON.stringify(spec.key.map((column) => clean[column])), clean);
   }
+  return [...byKey.values()];
 }
 
 async function recordRun(supabase: SupabaseClient, orgId: string, payload: UsagePayload, tokenHash: string, now: string) {
   // Recorded last: a run row marks the key as done, so a failed write above must stay retryable.
   // The bulky arrays already live in the usage tables and are not duplicated here.
-  const { daily: _daily, sessions: _sessions, sources: _sources, activity_daily: _activity, ...runPayload } = payload;
+  const {
+    daily: _daily, sessions: _sessions, sources: _sources, activity_daily: _activity,
+    accounts: _accounts, feature_usage: _features, plan_usage: _planUsage, ...runPayload
+  } = payload;
   const identity = payload.identity;
   const { error } = await supabase.from("collector_runs").insert({
     org_id: orgId,
@@ -218,6 +310,8 @@ async function handle(req: Request): Promise<Response> {
     source_rows: payload.sources?.length || 0,
     activity_rows: payload.activity_daily?.length || 0,
     anomalies: payload.anomalies?.length || 0,
+    accounts: payload.accounts?.length || 0,
+    plan_usage_samples: payload.plan_usage?.length || 0,
   }, { headers: corsHeaders });
 }
 

@@ -12,14 +12,14 @@ from typing import Any
 
 from claude_usage.discovery import SourceRecord
 from claude_usage.models import RequestUsage, SessionSummary
-from claude_usage.paths import ClaudePaths
-from claude_usage.transcripts import discover_jsonl, load_stats_cache, parse_all
+from claude_usage.paths import ClaudePaths, transcript_roots
+from claude_usage.transcripts import dedupe_requests, discover_jsonl, load_stats_cache, parse_requests, summarize_sessions
 
 SURFACES_BY_FILTER = {
     "claude-code": {"claude_code"},
-    "desktop": {"desktop_chat", "desktop_app"},
+    "desktop": {"desktop_chat", "desktop_app", "desktop_code"},
     "cowork": {"cowork"},
-    "extensions": {"extensions"},
+    "extensions": {"extensions", "ide_extension", "browser_extension"},
 }
 
 
@@ -33,9 +33,8 @@ class UsageQuery:
     def scope(self) -> dict[str, Any]:
         return {"days": self.days, "project": self.project, "main_only": self.main_only, "surface": self.surface}
 
-    @property
-    def includes_transcripts(self) -> bool:
-        return self.surface in ("all", "claude-code")
+    def includes_surface(self, surface: str) -> bool:
+        return self.surface == "all" or surface in SURFACES_BY_FILTER.get(self.surface, set())
 
     def filter_sources(self, sources: list[SourceRecord]) -> list[SourceRecord]:
         wanted = SURFACES_BY_FILTER.get(self.surface)
@@ -54,27 +53,29 @@ class Usage:
     stats: dict[str, Any] | None = None
 
 
-def _keep_sessions(sessions: dict[str, SessionSummary], requests: list[RequestUsage]) -> dict[str, SessionSummary]:
-    wanted = set(r.session_id for r in requests)
-    return {k: v for k, v in sessions.items() if k in wanted}
-
-
 def collect_usage(claude: ClaudePaths, query: UsageQuery) -> Usage:
-    paths = discover_jsonl(claude.projects_dir)
+    roots = [root for root in transcript_roots(claude) if query.includes_surface(root.surface)]
+    root_paths = [(root, discover_jsonl(root.projects_dir)) for root in roots]
     end = datetime.now(timezone.utc) + timedelta(seconds=1)
     start = end - timedelta(days=max(0, query.days)) if query.days is not None else None
-    usage = Usage(jsonl_paths=paths, period_start=start, period_end=end, stats=load_stats_cache(claude.stats_cache))
-    if not query.includes_transcripts:
+    usage = Usage(
+        jsonl_paths=[path for _, paths in root_paths for path in paths],
+        period_start=start,
+        period_end=end,
+        stats=load_stats_cache(claude.stats_cache),
+    )
+    if not root_paths:
         return usage
 
-    requests, sessions = parse_all(paths, claude.projects_dir, start=start, end=end)
+    parsed: list[RequestUsage] = []
+    for root, paths in root_paths:
+        parsed.extend(parse_requests(paths, root.projects_dir, start=start, end=end, surface=root.surface))
+    requests = dedupe_requests(parsed)
     if query.project:
         needle = query.project.lower()
         requests = [r for r in requests if needle in r.project.lower() or needle in r.file.lower()]
-        sessions = _keep_sessions(sessions, requests)
     if query.main_only:
         requests = [r for r in requests if not r.is_subagent]
-        sessions = _keep_sessions(sessions, requests)
     usage.requests = requests
-    usage.sessions = sessions
+    usage.sessions = summarize_sessions(requests)
     return usage

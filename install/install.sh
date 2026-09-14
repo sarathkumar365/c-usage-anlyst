@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # Installs the Claude usage agent for the current user.
-# Phases: check_system -> install_runtime -> preflight -> enroll_agent -> install_scheduler -> first_sync
+# Phases: check_system -> install_runtime -> preflight -> enroll_agent -> install_statusline -> install_scheduler -> first_sync
 set -eu
 
 APP_DIR="${CLAUDE_USAGE_AGENT_DIR:-$HOME/.claude-usage-agent}"
@@ -19,6 +19,8 @@ COLLECTOR_LABEL="${COLLECTOR_LABEL:-$(hostname)}"
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 # Test hook: skip writing a LaunchAgent/systemd/cron entry.
 SKIP_SCHEDULER="${SKIP_SCHEDULER:-}"
+# Opt out of capturing the account's usage % through Claude Code's statusline.
+SKIP_STATUSLINE="${SKIP_STATUSLINE:-}"
 
 RUNTIME_MODE=""
 PYTHON_BIN=""
@@ -235,6 +237,14 @@ install_cron() {
   status "OK" "Scheduler installed: cron"
 }
 
+install_statusline() {
+  if [ -n "$SKIP_STATUSLINE" ]; then
+    warn "Usage % capture skipped (SKIP_STATUSLINE set)"
+    return
+  fi
+  run_agent --install-statusline --claude-dir "$CLAUDE_DIR" || warn "Usage % capture could not be installed"
+}
+
 install_scheduler() {
   if [ -n "$SKIP_SCHEDULER" ]; then
     warn "Scheduler install skipped (SKIP_SCHEDULER set)"
@@ -263,5 +273,6 @@ check_system
 install_runtime
 preflight
 enroll_agent
+install_statusline
 install_scheduler
 first_sync
