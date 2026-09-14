@@ -4,6 +4,19 @@ Cross-platform Claude usage and activity analyzer with a metrics-only team colle
 
 It reports exact token usage from Claude Code transcripts and derived/evidence activity from local Claude Desktop, Cowork, and extension metadata.
 
+## Why This Exists
+
+Small companies often share one Claude subscription (for example a single Max plan) across the whole team, with members working from different machines and countries. Claude's own usage screen only shows how much of that one account has been used in total. It cannot say who used it, how much each person used, what they were working on, or which Claude product they used.
+
+This project answers exactly those questions for a shared account:
+
+- **Who** is using it: each person and machine, identified independently of the shared Claude login.
+- **How much** each person uses: exact tokens where the machine records them, activity everywhere else.
+- **What** they are working on: projects, models, tools, and sessions.
+- **Where** the usage comes from: Claude Code, Claude Desktop, Cowork, extensions.
+
+Every design choice should be judged against these goals. The collector sends metrics only, never prompt or response content.
+
 ## How It Is Organized
 
 Every piece of work belongs to one flow. Each flow is one module that receives already-resolved inputs and owns its own side effects.
