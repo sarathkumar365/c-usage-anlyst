@@ -1,18 +1,32 @@
+# Installs the Claude usage agent for the current Windows user.
+# Phases: Test-System -> Install-Runtime -> Invoke-Preflight -> Register-Agent -> Install-Scheduler -> Invoke-FirstSync
 param(
   [string]$IngestUrl = $(if ($env:INGEST_URL) { $env:INGEST_URL } else { "https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/ingest" }),
   [string]$CollectorToken = $env:COLLECTOR_TOKEN,
   [string]$EnrollUrl = $(if ($env:ENROLL_URL) { $env:ENROLL_URL } else { "https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/enroll" }),
   [string]$OrgId = $(if ($env:ORG_ID) { $env:ORG_ID } else { "team-main" }),
   [string]$AccountLabel = $(if ($env:ACCOUNT_LABEL) { $env:ACCOUNT_LABEL } else { $env:USERNAME }),
-  [string]$CollectorLabel = $env:COLLECTOR_LABEL,
+  [string]$CollectorLabel = $(if ($env:COLLECTOR_LABEL) { $env:COLLECTOR_LABEL } else { $env:COMPUTERNAME }),
   [string]$ClaudeDir = $(if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $HOME ".claude" }),
   [int]$SyncIntervalMinutes = $(if ($env:SYNC_INTERVAL_MINUTES) { [int]$env:SYNC_INTERVAL_MINUTES } else { 30 }),
+  [int]$SyncDays = $(if ($env:SYNC_DAYS) { [int]$env:SYNC_DAYS } else { 90 }),
   [string]$ReleaseBaseUrl = $(if ($env:RELEASE_BASE_URL) { $env:RELEASE_BASE_URL } else { "https://github.com/sarathkumar365/c-usage-anlyst/releases/latest/download" }),
-  [string]$CollectorUrl = $(if ($env:COLLECTOR_URL) { $env:COLLECTOR_URL } else { "https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/main/claude_usage_analyzer.py" }),
-  [string]$PackageBaseUrl = $(if ($env:PACKAGE_BASE_URL) { $env:PACKAGE_BASE_URL } else { "https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/main/claude_usage" })
+  [string]$SourceArchiveUrl = $(if ($env:SOURCE_ARCHIVE_URL) { $env:SOURCE_ARCHIVE_URL } else { "https://codeload.github.com/sarathkumar365/c-usage-anlyst/zip/refs/heads/main" })
 )
 
 $ErrorActionPreference = "Stop"
+
+$AppDir = Join-Path $env:LOCALAPPDATA "ClaudeUsageAgent"
+$BinPath = Join-Path $AppDir "claude-usage-agent.exe"
+$SrcDir = Join-Path $AppDir "src"
+$ScriptPath = Join-Path $SrcDir "claude_usage_analyzer.py"
+$LogDir = Join-Path $AppDir "logs"
+$AssetName = "claude-usage-agent-windows-x64.exe"
+$ReleaseAssetUrl = "$ReleaseBaseUrl/$AssetName"
+
+$script:RuntimeMode = ""
+$script:PyExe = ""
+$script:ProbeUrl = ""
 
 function Write-Check($Status, $Message) {
   "{0,-8} {1}" -f $Status, $Message | Write-Host
@@ -33,119 +47,144 @@ function Test-Url($Url, $Method = "Get") {
   }
 }
 
-Write-Host ""
-Write-Host "SYSTEM CHECK"
-Write-Host "------------------------------------"
-
-$Arch = $env:PROCESSOR_ARCHITECTURE
-if ($Arch -in @("AMD64", "x86_64")) {
-  $AssetName = "claude-usage-agent-windows-x64.exe"
-} else {
-  Stop-Install "Unsupported OS/CPU: Windows $Arch" "Use Windows x64, or install manually with Python."
-}
-Write-Check "OK" "OS supported: Windows $Arch"
-
-$AppDir = Join-Path $env:LOCALAPPDATA "ClaudeUsageAgent"
-$BinPath = Join-Path $AppDir "claude-usage-agent.exe"
-$ScriptPath = Join-Path $AppDir "claude_usage_analyzer.py"
-$LogDir = Join-Path $AppDir "logs"
-$ReleaseAssetUrl = "$ReleaseBaseUrl/$AssetName"
-
-New-Item -ItemType Directory -Force -Path $AppDir, $LogDir | Out-Null
-try {
-  $TestPath = Join-Path $AppDir ".write-test"
-  "ok" | Set-Content -Path $TestPath
-  Remove-Item -Path $TestPath -Force
-  Write-Check "OK" "Install dir writable: $AppDir"
-} catch {
-  Stop-Install "Install dir is not writable: $AppDir" "Check user permissions."
-}
-
-if (Test-Path (Join-Path $ClaudeDir "projects")) {
-  Write-Check "OK" "Claude projects dir found: $(Join-Path $ClaudeDir "projects")"
-} else {
-  Write-Check "WARN" "Claude projects dir missing: $(Join-Path $ClaudeDir "projects")"
-}
-
-if (Test-Url $EnrollUrl "Options") {
-  Write-Check "OK" "Supabase enroll reachable"
-} else {
-  Stop-Install "Supabase enroll unreachable" "Check internet/VPN/firewall and rerun."
-}
-
-if (-not $CollectorToken -and -not $env:ENROLLMENT_SECRET) {
-  Stop-Install "ENROLLMENT_SECRET is not set" "Run `$env:ENROLLMENT_SECRET = '<secret>' first, then rerun the install command."
-}
-
-$RuntimeMode = ""
-if (Test-Url $ReleaseAssetUrl) {
-  Invoke-WebRequest -Uri $ReleaseAssetUrl -OutFile $BinPath -UseBasicParsing
-  $RuntimeMode = "binary"
-  Write-Check "OK" "Downloaded native agent: $AssetName"
-} else {
-  Write-Check "WARN" "Native release asset unavailable, trying Python fallback"
-  $Python = Get-Command python -ErrorAction SilentlyContinue
-  if (-not $Python) {
-    $Python = Get-Command py -ErrorAction SilentlyContinue
+# Deliberately not an advanced function: agent flags like --sync must reach $args untouched.
+function Invoke-Agent {
+  if ($script:RuntimeMode -eq "binary") {
+    & $BinPath @args
+  } else {
+    & $script:PyExe $ScriptPath @args
   }
+}
+
+function Test-System {
+  Write-Host ""
+  Write-Host "SYSTEM CHECK"
+  Write-Host "------------------------------------"
+
+  $Arch = $env:PROCESSOR_ARCHITECTURE
+  if ($Arch -notin @("AMD64", "x86_64")) {
+    Stop-Install "Unsupported OS/CPU: Windows $Arch" "Use Windows x64, or install manually with Python."
+  }
+  Write-Check "OK" "OS supported: Windows $Arch"
+
+  New-Item -ItemType Directory -Force -Path $AppDir, $LogDir | Out-Null
+  try {
+    $TestPath = Join-Path $AppDir ".write-test"
+    "ok" | Set-Content -Path $TestPath
+    Remove-Item -Path $TestPath -Force
+    Write-Check "OK" "Install dir writable: $AppDir"
+  } catch {
+    Stop-Install "Install dir is not writable: $AppDir" "Check user permissions."
+  }
+
+  if (Test-Path (Join-Path $ClaudeDir "projects")) {
+    Write-Check "OK" "Claude projects dir found: $(Join-Path $ClaudeDir "projects")"
+  } else {
+    Write-Check "WARN" "Claude projects dir missing: $(Join-Path $ClaudeDir "projects")"
+  }
+
+  if (Test-Url $EnrollUrl "Options") {
+    Write-Check "OK" "Supabase enroll reachable"
+  } else {
+    Stop-Install "Supabase enroll unreachable" "Check internet/VPN/firewall and rerun."
+  }
+
+  if (-not $CollectorToken -and -not $env:ENROLLMENT_SECRET) {
+    Stop-Install "ENROLLMENT_SECRET is not set" "Run `$env:ENROLLMENT_SECRET = '<secret>' first, then rerun the install command."
+  }
+}
+
+function Install-PythonSource {
+  $Python = Get-Command python -ErrorAction SilentlyContinue
+  if (-not $Python) { $Python = Get-Command py -ErrorAction SilentlyContinue }
   if (-not $Python) {
     Stop-Install "No native binary and Python is missing" "Publish GitHub release assets or install Python 3.8+."
   }
-  $PyExe = $Python.Source
-  $PyVersion = & $PyExe -c "import sys; print('.'.join(map(str, sys.version_info[:3]))); raise SystemExit(0 if sys.version_info >= (3, 8) else 1)"
+  $script:PyExe = $Python.Source
+  $PyVersion = & $script:PyExe -c "import sys; print('.'.join(map(str, sys.version_info[:3]))); raise SystemExit(0 if sys.version_info >= (3, 8) else 1)"
   if ($LASTEXITCODE -ne 0) {
     Stop-Install "Python 3.8+ is required for fallback, found $PyVersion" "Install Python 3.8+ or wait for native release assets."
   }
-  Invoke-WebRequest -Uri $CollectorUrl -OutFile $ScriptPath -UseBasicParsing
-  $PackageDir = Join-Path $AppDir "claude_usage"
-  New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
-  foreach ($Module in @("__init__.py", "discovery.py")) {
-    Invoke-WebRequest -Uri "$PackageBaseUrl/$Module" -OutFile (Join-Path $PackageDir $Module) -UseBasicParsing
+
+  $Tmp = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString())
+  New-Item -ItemType Directory -Force -Path $Tmp | Out-Null
+  $Zip = Join-Path $Tmp "source.zip"
+  Invoke-WebRequest -Uri $SourceArchiveUrl -OutFile $Zip -UseBasicParsing
+  Expand-Archive -Path $Zip -DestinationPath $Tmp -Force
+  $Extracted = Get-ChildItem -Path $Tmp -Directory | Where-Object { Test-Path (Join-Path $_.FullName "claude_usage_analyzer.py") } | Select-Object -First 1
+  if (-not $Extracted) {
+    Stop-Install "Agent source archive is missing claude_usage_analyzer.py" "Check SOURCE_ARCHIVE_URL."
   }
-  $RuntimeMode = "python"
+  foreach ($Old in @($SrcDir, (Join-Path $AppDir "claude_usage"), (Join-Path $AppDir "claude_usage_analyzer.py"))) {
+    if (Test-Path $Old) { Remove-Item -Recurse -Force $Old }
+  }
+  New-Item -ItemType Directory -Force -Path $SrcDir | Out-Null
+  Copy-Item (Join-Path $Extracted.FullName "claude_usage_analyzer.py") $SrcDir
+  Copy-Item -Recurse (Join-Path $Extracted.FullName "claude_usage") $SrcDir
+  Remove-Item -Recurse -Force $Tmp
+
+  $script:RuntimeMode = "python"
+  $script:ProbeUrl = $SourceArchiveUrl
   Write-Check "OK" "Python fallback ready: $PyVersion"
 }
 
-if (-not $CollectorLabel) {
-  $CollectorLabel = $env:COMPUTERNAME
-}
-
-if ($RuntimeMode -eq "binary") {
-  & $BinPath --preflight --no-color --release-asset-url $ReleaseAssetUrl --enroll-url $EnrollUrl --ingest-url $IngestUrl --claude-dir $ClaudeDir
-  if ($LASTEXITCODE -ne 0) { Stop-Install "Agent preflight failed" "Fix the blocked item above, then rerun." }
-  if ($CollectorToken) {
-    & $BinPath --register --ingest-url $IngestUrl --collector-token $CollectorToken --org-id $OrgId --account-label $AccountLabel --collector-label $CollectorLabel --claude-dir $ClaudeDir --sync-interval-minutes $SyncIntervalMinutes
+function Install-Runtime {
+  if (Test-Url $ReleaseAssetUrl) {
+    Invoke-WebRequest -Uri $ReleaseAssetUrl -OutFile $BinPath -UseBasicParsing
+    $script:RuntimeMode = "binary"
+    $script:ProbeUrl = $ReleaseAssetUrl
+    Write-Check "OK" "Downloaded native agent: $AssetName"
   } else {
-    & $BinPath --enroll --enroll-url $EnrollUrl --org-id $OrgId --account-label $AccountLabel --collector-label $CollectorLabel --claude-dir $ClaudeDir --sync-interval-minutes $SyncIntervalMinutes
+    Write-Check "WARN" "Native release asset unavailable, trying Python fallback"
+    Install-PythonSource
   }
-  $Action = New-ScheduledTaskAction -Execute $BinPath -Argument "--sync --days 90"
-} else {
-  & $PyExe $ScriptPath --preflight --no-color --release-asset-url $CollectorUrl --enroll-url $EnrollUrl --ingest-url $IngestUrl --claude-dir $ClaudeDir
+}
+
+function Invoke-Preflight {
+  Invoke-Agent --preflight --no-color --release-asset-url $script:ProbeUrl --enroll-url $EnrollUrl --ingest-url $IngestUrl --claude-dir $ClaudeDir
   if ($LASTEXITCODE -ne 0) { Stop-Install "Agent preflight failed" "Fix the blocked item above, then rerun." }
+}
+
+function Register-Agent {
+  $Common = @("--org-id", $OrgId, "--account-label", $AccountLabel, "--collector-label", $CollectorLabel, "--claude-dir", $ClaudeDir, "--sync-interval-minutes", "$SyncIntervalMinutes")
   if ($CollectorToken) {
-    & $PyExe $ScriptPath --register --ingest-url $IngestUrl --collector-token $CollectorToken --org-id $OrgId --account-label $AccountLabel --collector-label $CollectorLabel --claude-dir $ClaudeDir --sync-interval-minutes $SyncIntervalMinutes
+    Invoke-Agent --register --ingest-url $IngestUrl --collector-token $CollectorToken @Common
   } else {
-    & $PyExe $ScriptPath --enroll --enroll-url $EnrollUrl --org-id $OrgId --account-label $AccountLabel --collector-label $CollectorLabel --claude-dir $ClaudeDir --sync-interval-minutes $SyncIntervalMinutes
+    Invoke-Agent --enroll --enroll-url $EnrollUrl @Common
   }
-  $Action = New-ScheduledTaskAction -Execute $PyExe -Argument "`"$ScriptPath`" --sync --days 90"
+  if ($LASTEXITCODE -ne 0) { Stop-Install "Agent enrollment failed" "Fix the error above, then rerun." }
 }
 
-$Trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) -RepetitionInterval (New-TimeSpan -Minutes $SyncIntervalMinutes)
-$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-
-Register-ScheduledTask `
-  -TaskName "Claude Usage Agent" `
-  -Action $Action `
-  -Trigger $Trigger `
-  -Settings $Settings `
-  -Description "Uploads metrics-only Claude usage and activity aggregates." `
-  -Force | Out-Null
-Write-Check "OK" "Scheduler installed: Task Scheduler"
-
-if ($RuntimeMode -eq "binary") {
-  & $BinPath --sync --days 90
-  & $BinPath --status
-} else {
-  & $PyExe $ScriptPath --sync --days 90
-  & $PyExe $ScriptPath --status
+function Install-Scheduler {
+  if ($env:SKIP_SCHEDULER) {
+    Write-Check "WARN" "Scheduler install skipped (SKIP_SCHEDULER set)"
+    return
+  }
+  if ($script:RuntimeMode -eq "binary") {
+    $Action = New-ScheduledTaskAction -Execute $BinPath -Argument "--sync --days $SyncDays"
+  } else {
+    $Action = New-ScheduledTaskAction -Execute $script:PyExe -Argument "`"$ScriptPath`" --sync --days $SyncDays"
+  }
+  $Trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) -RepetitionInterval (New-TimeSpan -Minutes $SyncIntervalMinutes)
+  $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+  Register-ScheduledTask `
+    -TaskName "Claude Usage Agent" `
+    -Action $Action `
+    -Trigger $Trigger `
+    -Settings $Settings `
+    -Description "Uploads metrics-only Claude usage and activity aggregates." `
+    -Force | Out-Null
+  Write-Check "OK" "Scheduler installed: Task Scheduler"
 }
+
+function Invoke-FirstSync {
+  Invoke-Agent --sync --days "$SyncDays"
+  Invoke-Agent --status
+}
+
+Test-System
+Install-Runtime
+Invoke-Preflight
+Register-Agent
+Install-Scheduler
+Invoke-FirstSync

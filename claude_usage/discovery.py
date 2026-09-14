@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import json
 import os
 import platform
-import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
+
+from claude_usage.util import parse_ts, stable_hash
 
 
 DISCOVERY_CACHE_TTL_HOURS = 24
@@ -68,21 +68,6 @@ class SourceRecord:
 
     def to_cache(self) -> dict[str, Any]:
         return asdict(self)
-
-
-def stable_hash(value: Any) -> str:
-    encoded = json.dumps(value, sort_keys=True, default=str).encode("utf-8", errors="ignore")
-    return __import__("hashlib").sha256(encoded).hexdigest()
-
-
-def parse_ts(value: Any) -> datetime | None:
-    if not value or not isinstance(value, str):
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-    except Exception:
-        return None
 
 
 def iso_from_mtime(mtime: float | None) -> str | None:

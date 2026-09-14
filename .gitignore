@@ -4,3 +4,4 @@ __pycache__/
 .env
 .claude-usage-agent/
 dist/
+.claude/.reviewed

@@ -1,3 +1,10 @@
+-- Canonical schema for the Claude usage collector. Safe to re-run on an existing database.
+-- Incremental changes for already-deployed databases live in supabase/migrations/.
+
+-- ============================================================================
+-- Tables
+-- ============================================================================
+
 create extension if not exists pgcrypto;
 
 create table if not exists organizations (
@@ -201,6 +208,10 @@ create table if not exists identity_aliases (
   primary key (org_id, entity_type, entity_id)
 );
 
+-- ============================================================================
+-- Row level security and indexes
+-- ============================================================================
+
 alter table organizations enable row level security;
 alter table org_members enable row level security;
 alter table collector_tokens enable row level security;
@@ -223,6 +234,10 @@ create index if not exists usage_sources_seen_idx on usage_sources(org_id, lates
 create index if not exists usage_activity_daily_org_day_idx on usage_activity_daily(org_id, day desc);
 create index if not exists collector_runs_identity_seen_idx on collector_runs(org_id, user_id, machine_id, collector_id, received_at desc);
 
+-- ============================================================================
+-- Access helpers and policies (members read; admins manage aliases; no client writes)
+-- ============================================================================
+
 create or replace function is_org_member(target_org_id text)
 returns boolean
 language sql
@@ -236,46 +251,6 @@ as $$
       and user_id = auth.uid()
   );
 $$;
-
-create policy "members can read organizations"
-on organizations for select
-using (is_org_member(id));
-
-create policy "members can read org membership"
-on org_members for select
-using (is_org_member(org_id));
-
-create policy "members can read machines"
-on machines for select
-using (is_org_member(org_id));
-
-create policy "members can read machine users"
-on machine_users for select
-using (is_org_member(org_id));
-
-create policy "members can read collector runs"
-on collector_runs for select
-using (is_org_member(org_id));
-
-create policy "members can read daily usage"
-on usage_daily for select
-using (is_org_member(org_id));
-
-create policy "members can read session usage"
-on usage_sessions for select
-using (is_org_member(org_id));
-
-create policy "members can read anomalies"
-on usage_anomalies for select
-using (is_org_member(org_id));
-
-create policy "members can read sources"
-on usage_sources for select
-using (is_org_member(org_id));
-
-create policy "members can read activity daily"
-on usage_activity_daily for select
-using (is_org_member(org_id));
 
 create or replace function is_org_admin(target_org_id text)
 returns boolean
@@ -291,6 +266,56 @@ as $$
       and role in ('admin', 'owner')
   );
 $$;
+
+drop policy if exists "members can read organizations" on organizations;
+create policy "members can read organizations"
+on organizations for select
+using (is_org_member(id));
+
+drop policy if exists "members can read org membership" on org_members;
+create policy "members can read org membership"
+on org_members for select
+using (is_org_member(org_id));
+
+drop policy if exists "members can read machines" on machines;
+create policy "members can read machines"
+on machines for select
+using (is_org_member(org_id));
+
+drop policy if exists "members can read machine users" on machine_users;
+create policy "members can read machine users"
+on machine_users for select
+using (is_org_member(org_id));
+
+drop policy if exists "members can read collector runs" on collector_runs;
+create policy "members can read collector runs"
+on collector_runs for select
+using (is_org_member(org_id));
+
+drop policy if exists "members can read daily usage" on usage_daily;
+create policy "members can read daily usage"
+on usage_daily for select
+using (is_org_member(org_id));
+
+drop policy if exists "members can read session usage" on usage_sessions;
+create policy "members can read session usage"
+on usage_sessions for select
+using (is_org_member(org_id));
+
+drop policy if exists "members can read anomalies" on usage_anomalies;
+create policy "members can read anomalies"
+on usage_anomalies for select
+using (is_org_member(org_id));
+
+drop policy if exists "members can read sources" on usage_sources;
+create policy "members can read sources"
+on usage_sources for select
+using (is_org_member(org_id));
+
+drop policy if exists "members can read activity daily" on usage_activity_daily;
+create policy "members can read activity daily"
+on usage_activity_daily for select
+using (is_org_member(org_id));
 
 drop policy if exists "members can read identity aliases" on identity_aliases;
 create policy "members can read identity aliases"
@@ -312,6 +337,63 @@ drop policy if exists "admins can delete identity aliases" on identity_aliases;
 create policy "admins can delete identity aliases"
 on identity_aliases for delete
 using (is_org_admin(org_id));
+
+-- ============================================================================
+-- Dashboard read model
+-- ============================================================================
+
+-- Display labels: an admin alias wins, then local metadata, then a short ID.
+create or replace function display_person(p_org_id text, p_user_id text, p_machine_id text)
+returns text
+language sql
+stable
+set search_path = public
+as $$
+  select coalesce(
+    (select nullif(display_name, '') from identity_aliases where org_id = p_org_id and entity_type = 'user' and entity_id = p_user_id),
+    (select nullif(os_username, '') from machine_users where org_id = p_org_id and user_id = p_user_id and machine_id = p_machine_id),
+    left(p_user_id, 10)
+  );
+$$;
+
+create or replace function display_machine(p_org_id text, p_machine_id text)
+returns text
+language sql
+stable
+set search_path = public
+as $$
+  select coalesce(
+    (select nullif(display_name, '') from identity_aliases where org_id = p_org_id and entity_type = 'machine' and entity_id = p_machine_id),
+    (select nullif(hostname, '') from machines where org_id = p_org_id and machine_id = p_machine_id),
+    left(p_machine_id, 10)
+  );
+$$;
+
+create or replace function display_collector(p_org_id text, p_collector_id text, p_machine_id text)
+returns text
+language sql
+stable
+set search_path = public
+as $$
+  select coalesce(
+    (select nullif(display_name, '') from identity_aliases where org_id = p_org_id and entity_type = 'collector' and entity_id = p_collector_id),
+    (select nullif(hostname, '') from machines where org_id = p_org_id and machine_id = p_machine_id),
+    left(p_collector_id, 10)
+  );
+$$;
+
+create or replace function display_account(p_org_id text, p_account_label text)
+returns text
+language sql
+stable
+set search_path = public
+as $$
+  select coalesce(
+    (select nullif(display_name, '') from identity_aliases where org_id = p_org_id and entity_type = 'account' and entity_id = p_account_label),
+    nullif(p_account_label, ''),
+    'Unlabeled account'
+  );
+$$;
 
 create or replace view dashboard_people_usage
 with (security_invoker = true)
@@ -352,10 +434,10 @@ select
   u.machine_id,
   u.user_id,
   u.account_label,
-  coalesce(nullif(user_alias.display_name, ''), nullif(mu.os_username, ''), left(u.user_id, 10)) as person_label,
-  coalesce(nullif(machine_alias.display_name, ''), nullif(m.hostname, ''), left(u.machine_id, 10)) as machine_label,
-  coalesce(nullif(collector_alias.display_name, ''), nullif(m.hostname, ''), left(u.collector_id, 10)) as collector_label,
-  coalesce(nullif(account_alias.display_name, ''), nullif(u.account_label, ''), 'Unlabeled account') as account_display_label,
+  display_person(u.org_id, u.user_id, u.machine_id) as person_label,
+  display_machine(u.org_id, u.machine_id) as machine_label,
+  display_collector(u.org_id, u.collector_id, u.machine_id) as collector_label,
+  display_account(u.org_id, u.account_label) as account_display_label,
   mu.os_username,
   m.hostname,
   m.fqdn,
@@ -390,14 +472,6 @@ left join machines m
   on m.org_id = u.org_id and m.machine_id = u.machine_id
 left join latest_runs lr
   on lr.org_id = u.org_id and lr.collector_id = u.collector_id and lr.machine_id = u.machine_id and lr.user_id = u.user_id and lr.account_label = u.account_label
-left join identity_aliases user_alias
-  on user_alias.org_id = u.org_id and user_alias.entity_type = 'user' and user_alias.entity_id = u.user_id
-left join identity_aliases machine_alias
-  on machine_alias.org_id = u.org_id and machine_alias.entity_type = 'machine' and machine_alias.entity_id = u.machine_id
-left join identity_aliases collector_alias
-  on collector_alias.org_id = u.org_id and collector_alias.entity_type = 'collector' and collector_alias.entity_id = u.collector_id
-left join identity_aliases account_alias
-  on account_alias.org_id = u.org_id and account_alias.entity_type = 'account' and account_alias.entity_id = u.account_label
 left join lateral (
   select project_name
   from usage_daily d
@@ -432,9 +506,9 @@ select
   d.account_label,
   d.surface,
   d.confidence,
-  coalesce(nullif(user_alias.display_name, ''), nullif(mu.os_username, ''), left(d.user_id, 10)) as person_label,
-  coalesce(nullif(machine_alias.display_name, ''), nullif(m.hostname, ''), left(d.machine_id, 10)) as machine_label,
-  coalesce(nullif(account_alias.display_name, ''), nullif(d.account_label, ''), 'Unlabeled account') as account_display_label,
+  display_person(d.org_id, d.user_id, d.machine_id) as person_label,
+  display_machine(d.org_id, d.machine_id) as machine_label,
+  display_account(d.org_id, d.account_label) as account_display_label,
   d.project,
   d.project_name,
   sum(d.requests)::bigint as requests,
@@ -444,17 +518,7 @@ select
   sum(d.cache_read_input_tokens + d.cache_creation_input_tokens)::bigint as cache_tokens,
   sum(d.tool_calls)::bigint as tool_calls
 from usage_daily d
-left join machine_users mu
-  on mu.org_id = d.org_id and mu.user_id = d.user_id and mu.machine_id = d.machine_id
-left join machines m
-  on m.org_id = d.org_id and m.machine_id = d.machine_id
-left join identity_aliases user_alias
-  on user_alias.org_id = d.org_id and user_alias.entity_type = 'user' and user_alias.entity_id = d.user_id
-left join identity_aliases machine_alias
-  on machine_alias.org_id = d.org_id and machine_alias.entity_type = 'machine' and machine_alias.entity_id = d.machine_id
-left join identity_aliases account_alias
-  on account_alias.org_id = d.org_id and account_alias.entity_type = 'account' and account_alias.entity_id = d.account_label
-group by d.org_id, d.day, d.collector_id, d.machine_id, d.user_id, d.account_label, d.surface, d.confidence, person_label, machine_label, account_display_label, d.project, d.project_name;
+group by d.org_id, d.day, d.collector_id, d.machine_id, d.user_id, d.account_label, d.surface, d.confidence, d.project, d.project_name;
 
 create or replace view dashboard_user_model_usage
 with (security_invoker = true)
@@ -468,9 +532,9 @@ select
   d.account_label,
   d.surface,
   d.confidence,
-  coalesce(nullif(user_alias.display_name, ''), nullif(mu.os_username, ''), left(d.user_id, 10)) as person_label,
-  coalesce(nullif(machine_alias.display_name, ''), nullif(m.hostname, ''), left(d.machine_id, 10)) as machine_label,
-  coalesce(nullif(account_alias.display_name, ''), nullif(d.account_label, ''), 'Unlabeled account') as account_display_label,
+  display_person(d.org_id, d.user_id, d.machine_id) as person_label,
+  display_machine(d.org_id, d.machine_id) as machine_label,
+  display_account(d.org_id, d.account_label) as account_display_label,
   case when nullif(d.model, '') is null or d.model = '0' then 'Unknown model' else d.model end as model_label,
   sum(d.requests)::bigint as requests,
   sum(d.reported_total)::bigint as reported_total,
@@ -480,17 +544,7 @@ select
   sum(d.web_search_requests)::bigint as web_search_requests,
   sum(d.web_fetch_requests)::bigint as web_fetch_requests
 from usage_daily d
-left join machine_users mu
-  on mu.org_id = d.org_id and mu.user_id = d.user_id and mu.machine_id = d.machine_id
-left join machines m
-  on m.org_id = d.org_id and m.machine_id = d.machine_id
-left join identity_aliases user_alias
-  on user_alias.org_id = d.org_id and user_alias.entity_type = 'user' and user_alias.entity_id = d.user_id
-left join identity_aliases machine_alias
-  on machine_alias.org_id = d.org_id and machine_alias.entity_type = 'machine' and machine_alias.entity_id = d.machine_id
-left join identity_aliases account_alias
-  on account_alias.org_id = d.org_id and account_alias.entity_type = 'account' and account_alias.entity_id = d.account_label
-group by d.org_id, d.day, d.collector_id, d.machine_id, d.user_id, d.account_label, d.surface, d.confidence, person_label, machine_label, account_display_label, model_label;
+group by d.org_id, d.day, d.collector_id, d.machine_id, d.user_id, d.account_label, d.surface, d.confidence, model_label;
 
 create or replace view dashboard_sessions
 with (security_invoker = true)
@@ -503,9 +557,9 @@ select
   s.account_label,
   s.surface,
   s.confidence,
-  coalesce(nullif(user_alias.display_name, ''), nullif(mu.os_username, ''), left(s.user_id, 10)) as person_label,
-  coalesce(nullif(machine_alias.display_name, ''), nullif(m.hostname, ''), left(s.machine_id, 10)) as machine_label,
-  coalesce(nullif(account_alias.display_name, ''), nullif(s.account_label, ''), 'Unlabeled account') as account_display_label,
+  display_person(s.org_id, s.user_id, s.machine_id) as person_label,
+  display_machine(s.org_id, s.machine_id) as machine_label,
+  display_account(s.org_id, s.account_label) as account_display_label,
   s.session_id,
   s.project,
   s.project_name,
@@ -520,17 +574,7 @@ select
   s.reported_total,
   s.cache_read_input_tokens + s.cache_creation_input_tokens as cache_tokens,
   s.tool_calls
-from usage_sessions s
-left join machine_users mu
-  on mu.org_id = s.org_id and mu.user_id = s.user_id and mu.machine_id = s.machine_id
-left join machines m
-  on m.org_id = s.org_id and m.machine_id = s.machine_id
-left join identity_aliases user_alias
-  on user_alias.org_id = s.org_id and user_alias.entity_type = 'user' and user_alias.entity_id = s.user_id
-left join identity_aliases machine_alias
-  on machine_alias.org_id = s.org_id and machine_alias.entity_type = 'machine' and machine_alias.entity_id = s.machine_id
-left join identity_aliases account_alias
-  on account_alias.org_id = s.org_id and account_alias.entity_type = 'account' and account_alias.entity_id = s.account_label;
+from usage_sessions s;
 
 create or replace view dashboard_sources
 with (security_invoker = true)
@@ -541,9 +585,9 @@ select
   s.machine_id,
   s.user_id,
   s.account_label,
-  coalesce(nullif(user_alias.display_name, ''), nullif(mu.os_username, ''), left(s.user_id, 10)) as person_label,
-  coalesce(nullif(machine_alias.display_name, ''), nullif(m.hostname, ''), left(s.machine_id, 10)) as machine_label,
-  coalesce(nullif(account_alias.display_name, ''), nullif(s.account_label, ''), 'Unlabeled account') as account_display_label,
+  display_person(s.org_id, s.user_id, s.machine_id) as person_label,
+  display_machine(s.org_id, s.machine_id) as machine_label,
+  display_account(s.org_id, s.account_label) as account_display_label,
   s.source_id,
   s.surface,
   s.status,
@@ -554,17 +598,7 @@ select
   s.extractor,
   s.anomalies,
   s.updated_at
-from usage_sources s
-left join machine_users mu
-  on mu.org_id = s.org_id and mu.user_id = s.user_id and mu.machine_id = s.machine_id
-left join machines m
-  on m.org_id = s.org_id and m.machine_id = s.machine_id
-left join identity_aliases user_alias
-  on user_alias.org_id = s.org_id and user_alias.entity_type = 'user' and user_alias.entity_id = s.user_id
-left join identity_aliases machine_alias
-  on machine_alias.org_id = s.org_id and machine_alias.entity_type = 'machine' and machine_alias.entity_id = s.machine_id
-left join identity_aliases account_alias
-  on account_alias.org_id = s.org_id and account_alias.entity_type = 'account' and account_alias.entity_id = s.account_label;
+from usage_sources s;
 
 create or replace view dashboard_activity_daily
 with (security_invoker = true)
@@ -576,9 +610,9 @@ select
   a.machine_id,
   a.user_id,
   a.account_label,
-  coalesce(nullif(user_alias.display_name, ''), nullif(mu.os_username, ''), left(a.user_id, 10)) as person_label,
-  coalesce(nullif(machine_alias.display_name, ''), nullif(m.hostname, ''), left(a.machine_id, 10)) as machine_label,
-  coalesce(nullif(account_alias.display_name, ''), nullif(a.account_label, ''), 'Unlabeled account') as account_display_label,
+  display_person(a.org_id, a.user_id, a.machine_id) as person_label,
+  display_machine(a.org_id, a.machine_id) as machine_label,
+  display_account(a.org_id, a.account_label) as account_display_label,
   a.surface,
   a.source_id,
   sum(a.sessions)::bigint as sessions,
@@ -588,17 +622,7 @@ select
   sum(a.reported_total)::bigint as reported_total,
   a.confidence
 from usage_activity_daily a
-left join machine_users mu
-  on mu.org_id = a.org_id and mu.user_id = a.user_id and mu.machine_id = a.machine_id
-left join machines m
-  on m.org_id = a.org_id and m.machine_id = a.machine_id
-left join identity_aliases user_alias
-  on user_alias.org_id = a.org_id and user_alias.entity_type = 'user' and user_alias.entity_id = a.user_id
-left join identity_aliases machine_alias
-  on machine_alias.org_id = a.org_id and machine_alias.entity_type = 'machine' and machine_alias.entity_id = a.machine_id
-left join identity_aliases account_alias
-  on account_alias.org_id = a.org_id and account_alias.entity_type = 'account' and account_alias.entity_id = a.account_label
-group by a.org_id, a.day, a.collector_id, a.machine_id, a.user_id, a.account_label, person_label, machine_label, account_display_label, a.surface, a.source_id, a.confidence;
+group by a.org_id, a.day, a.collector_id, a.machine_id, a.user_id, a.account_label, a.surface, a.source_id, a.confidence;
 
 create or replace view dashboard_anomalies
 with (security_invoker = true)
@@ -608,21 +632,41 @@ select
   a.collector_id,
   a.machine_id,
   a.user_id,
-  coalesce(nullif(user_alias.display_name, ''), nullif(mu.os_username, ''), left(a.user_id, 10)) as person_label,
-  coalesce(nullif(machine_alias.display_name, ''), nullif(m.hostname, ''), left(a.machine_id, 10)) as machine_label,
+  display_person(a.org_id, a.user_id, a.machine_id) as person_label,
+  display_machine(a.org_id, a.machine_id) as machine_label,
   a.code,
   a.severity,
   a.message,
   a.last_seen_at
-from usage_anomalies a
-left join machine_users mu
-  on mu.org_id = a.org_id and mu.user_id = a.user_id and mu.machine_id = a.machine_id
-left join machines m
-  on m.org_id = a.org_id and m.machine_id = a.machine_id
-left join identity_aliases user_alias
-  on user_alias.org_id = a.org_id and user_alias.entity_type = 'user' and user_alias.entity_id = a.user_id
-left join identity_aliases machine_alias
-  on machine_alias.org_id = a.org_id and machine_alias.entity_type = 'machine' and machine_alias.entity_id = a.machine_id;
+from usage_anomalies a;
+
+-- Top tools per collector identity, from the most recent sync's drivers (the collector's sync window, not the dashboard range).
+create or replace view dashboard_person_tools
+with (security_invoker = true)
+as
+select
+  r.org_id,
+  r.collector_id,
+  r.machine_id,
+  r.user_id,
+  r.account_label,
+  t.tool,
+  t.calls,
+  r.period_start,
+  r.period_end,
+  r.received_at as reported_at
+from (
+  select distinct on (org_id, collector_id, machine_id, user_id, account_label)
+    org_id, collector_id, machine_id, user_id, account_label, period_start, period_end, received_at, payload
+  from collector_runs
+  where payload ? 'drivers'
+  order by org_id, collector_id, machine_id, user_id, account_label, received_at desc
+) r
+cross join lateral jsonb_to_recordset(coalesce(r.payload -> 'drivers' -> 'top_tools', '[]'::jsonb)) as t(tool text, calls bigint);
+
+-- ============================================================================
+-- Grants
+-- ============================================================================
 
 revoke all on identity_aliases from anon, authenticated;
 revoke all on enrollment_secrets from anon, authenticated;
@@ -633,6 +677,7 @@ revoke all on dashboard_sessions from anon, authenticated;
 revoke all on dashboard_anomalies from anon, authenticated;
 revoke all on dashboard_sources from anon, authenticated;
 revoke all on dashboard_activity_daily from anon, authenticated;
+revoke all on dashboard_person_tools from anon, authenticated;
 
 grant select, insert, update, delete on identity_aliases to authenticated;
 grant select on dashboard_people_usage to authenticated;
@@ -642,6 +687,11 @@ grant select on dashboard_sessions to authenticated;
 grant select on dashboard_anomalies to authenticated;
 grant select on dashboard_sources to authenticated;
 grant select on dashboard_activity_daily to authenticated;
+grant select on dashboard_person_tools to authenticated;
+
+-- ============================================================================
+-- Admin functions (service role only)
+-- ============================================================================
 
 create or replace function create_collector_token(
   p_org_id text,

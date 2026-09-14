@@ -1,21 +1,24 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+// Enroll flow: verify enrollment secret -> validate identity -> rate limit -> rotate collector token.
+import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+type EnrollIdentity = {
+  collector_id?: string;
+  machine_id?: string;
+  user_id?: string;
+  os_username?: string;
+  hostname?: string;
+  fqdn?: string;
+  collector_label?: string;
+  account_label?: string;
+  home_path_hash?: string;
+  platform?: Record<string, unknown>;
+};
 
 type EnrollPayload = {
   schema_version?: number;
   collector_version?: string;
   org_id?: string;
-  identity?: {
-    collector_id?: string;
-    machine_id?: string;
-    user_id?: string;
-    os_username?: string;
-    hostname?: string;
-    fqdn?: string;
-    collector_label?: string;
-    account_label?: string;
-    home_path_hash?: string;
-    platform?: Record<string, unknown>;
-  };
+  identity?: EnrollIdentity;
 };
 
 const DEFAULT_ORG_ID = "team-main";
@@ -28,6 +31,13 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, content-type, x-enrollment-secret",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
+
+// Thrown by any step to end the request with this status and message.
+class HttpError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+  }
+}
 
 async function sha256Hex(value: string): Promise<string> {
   const data = new TextEncoder().encode(value);
@@ -55,100 +65,86 @@ function clientIp(req: Request): string {
   );
 }
 
-Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
-  }
-  if (req.method !== "POST") {
-    return new Response("method not allowed", { status: 405, headers: corsHeaders });
-  }
-
-  const supabaseUrl = Deno.env.get("SUPABASE_URL");
-  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  if (!supabaseUrl || !serviceRoleKey) {
-    return new Response("server is not configured", { status: 500, headers: corsHeaders });
-  }
-
-  const providedSecret = req.headers.get("x-enrollment-secret") || "";
-  if (!providedSecret) {
-    return new Response("missing enrollment secret", { status: 401, headers: corsHeaders });
-  }
-
+async function parseIdentity(req: Request): Promise<Required<Pick<EnrollIdentity, "collector_id" | "machine_id" | "user_id">> & EnrollIdentity> {
   let payload: EnrollPayload;
   try {
     payload = await req.json();
   } catch {
-    return new Response("invalid json", { status: 400, headers: corsHeaders });
+    throw new HttpError(400, "invalid json");
   }
-
   const identity = payload.identity || {};
   if (!identity.collector_id || !identity.machine_id || !identity.user_id) {
-    return new Response("invalid enrollment identity", { status: 400, headers: corsHeaders });
+    throw new HttpError(400, "invalid enrollment identity");
   }
+  return identity as Required<Pick<EnrollIdentity, "collector_id" | "machine_id" | "user_id">> & EnrollIdentity;
+}
 
-  const supabase = createClient(supabaseUrl, serviceRoleKey, {
-    auth: { persistSession: false },
-  });
-
-  const orgId = DEFAULT_ORG_ID;
-
-  const { data: secretRow, error: secretError } = await supabase
+async function verifySecret(supabase: SupabaseClient, orgId: string, secret: string) {
+  const { data, error } = await supabase
     .from("enrollment_secrets")
     .select("secret_hash")
     .eq("org_id", orgId)
-    .eq("secret_hash", await sha256Hex(providedSecret))
+    .eq("secret_hash", await sha256Hex(secret))
     .is("revoked_at", null)
     .maybeSingle();
-  if (secretError) {
-    return new Response(secretError.message, { status: 500, headers: corsHeaders });
-  }
-  if (!secretRow) {
-    return new Response("invalid enrollment secret", { status: 403, headers: corsHeaders });
-  }
-  const ipHash = await sha256Hex(`${clientIp(req)}:${new Date().toISOString().slice(0, 10)}:${serviceRoleKey}`);
+  if (error) throw new HttpError(500, error.message);
+  if (!data) throw new HttpError(403, "invalid enrollment secret");
+}
+
+async function enforceRateLimit(supabase: SupabaseClient, ipHash: string) {
   const since = new Date();
   since.setUTCHours(0, 0, 0, 0);
-
-  const { count, error: countError } = await supabase
+  const { count, error } = await supabase
     .from("collector_tokens")
     .select("token_hash", { count: "exact", head: true })
     .eq("enrollment_ip_hash", ipHash)
     .gte("enrolled_at", since.toISOString());
-  if (countError) {
-    return new Response(countError.message, { status: 500, headers: corsHeaders });
-  }
-  if ((count || 0) >= MAX_ENROLLMENTS_PER_IP_PER_DAY) {
-    return new Response("daily enrollment limit reached", { status: 429, headers: corsHeaders });
-  }
+  if (error) throw new HttpError(500, error.message);
+  if ((count || 0) >= MAX_ENROLLMENTS_PER_IP_PER_DAY) throw new HttpError(429, "daily enrollment limit reached");
+}
 
+async function issueToken(supabase: SupabaseClient, orgId: string, identity: EnrollIdentity & { collector_id: string }, ipHash: string): Promise<string> {
   const token = randomToken();
-  const tokenHash = await sha256Hex(token);
-  const labelParts = [
-    identity.os_username || "unknown-user",
-    identity.hostname || identity.collector_label || "unknown-host",
-    new Date().toISOString(),
-  ];
+  const now = new Date().toISOString();
 
+  // One active token per collector: re-enrolling revokes the previous one.
   await supabase
     .from("collector_tokens")
-    .update({ revoked_at: new Date().toISOString() })
+    .update({ revoked_at: now })
     .eq("org_id", orgId)
     .eq("collector_id", identity.collector_id)
     .is("revoked_at", null);
 
   const { error } = await supabase.from("collector_tokens").insert({
-    token_hash: tokenHash,
+    token_hash: await sha256Hex(token),
     org_id: orgId,
-    label: labelParts.join(" / "),
+    label: [identity.os_username || "unknown-user", identity.hostname || identity.collector_label || "unknown-host", now].join(" / "),
     collector_id: identity.collector_id,
     machine_id: identity.machine_id,
     user_id: identity.user_id,
-    enrolled_at: new Date().toISOString(),
+    enrolled_at: now,
     enrollment_ip_hash: ipHash,
   });
-  if (error) {
-    return new Response(error.message, { status: 500, headers: corsHeaders });
-  }
+  if (error) throw new HttpError(500, error.message);
+  return token;
+}
+
+async function handle(req: Request): Promise<Response> {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!supabaseUrl || !serviceRoleKey) throw new HttpError(500, "server is not configured");
+
+  const secret = req.headers.get("x-enrollment-secret") || "";
+  if (!secret) throw new HttpError(401, "missing enrollment secret");
+  const identity = await parseIdentity(req);
+
+  const supabase = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false } });
+  const orgId = DEFAULT_ORG_ID;
+  await verifySecret(supabase, orgId, secret);
+
+  const ipHash = await sha256Hex(`${clientIp(req)}:${new Date().toISOString().slice(0, 10)}:${serviceRoleKey}`);
+  await enforceRateLimit(supabase, ipHash);
+  const token = await issueToken(supabase, orgId, identity, ipHash);
 
   return Response.json({
     ok: true,
@@ -157,4 +153,15 @@ Deno.serve(async (req) => {
     collector_token: token,
     sync_interval_minutes: DEFAULT_SYNC_INTERVAL_MINUTES,
   }, { headers: corsHeaders });
+}
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method !== "POST") return new Response("method not allowed", { status: 405, headers: corsHeaders });
+  try {
+    return await handle(req);
+  } catch (err) {
+    if (err instanceof HttpError) return new Response(err.message, { status: err.status, headers: corsHeaders });
+    throw err;
+  }
 });

@@ -10,8 +10,27 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    name: Test (Python ${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python: ["3.9", "3.12"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -t . -v
+
   build:
     name: Build ${{ matrix.asset_name }}
+    needs: test
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -47,6 +66,12 @@ jobs:
 
       - name: Build standalone executable
         run: pyinstaller --onefile --name claude-usage-agent claude_usage_analyzer.py
+
+      - name: Smoke test executable
+        shell: bash
+        run: |
+          "dist/${{ matrix.output_name }}" --help > /dev/null
+          "dist/${{ matrix.output_name }}" --enroll --no-color && exit 1 || test $? -eq 2
 
       - name: Stage Unix asset
         if: runner.os != 'Windows'

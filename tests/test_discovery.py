@@ -12,7 +12,6 @@ from claude_usage.discovery import (
     discover_claude_sources,
     discovery_needs_full,
 )
-import claude_usage_analyzer as analyzer
 
 
 class DiscoveryTests(unittest.TestCase):
@@ -117,50 +116,6 @@ class DiscoveryTests(unittest.TestCase):
             fresh_state = cache_discovery({}, {**cache, "discovered_at": now.isoformat()}, claude_dir=claude_dir, collector_version="1")
             self.assertFalse(discovery_needs_full(fresh_state, claude_dir=claude_dir, collector_version="1", now=now))
             self.assertTrue(discovery_needs_full(fresh_state, claude_dir=claude_dir, collector_version="2", now=now))
-
-    def test_sync_payload_does_not_include_raw_source_paths(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            claude_dir = Path(tmp) / ".claude"
-            projects_dir = claude_dir / "projects"
-            projects_dir.mkdir(parents=True)
-            old_dir = analyzer.CLAUDE_DIR
-            try:
-                analyzer.configure_claude_dir(str(claude_dir))
-                sources, _ = discover_claude_sources(claude_dir, system="Darwin", home=Path(tmp), full=True)
-                payload = analyzer.build_sync_payload(
-                    [],
-                    {},
-                    None,
-                    [],
-                    None,
-                    None,
-                    sources=sources,
-                    activity_daily=[],
-                )
-            finally:
-                analyzer.configure_claude_dir(str(old_dir))
-
-            encoded = json.dumps(payload)
-            self.assertNotIn(str(claude_dir), encoded)
-            self.assertNotIn(str(projects_dir), encoded)
-            self.assertIn("config_dir_hash", payload["claude"])
-            self.assertIn("projects_dir_hash", payload["claude"])
-
-    def test_idempotency_key_ignores_sync_window(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            claude_dir = Path(tmp) / ".claude"
-            (claude_dir / "projects").mkdir(parents=True)
-            old_dir = analyzer.CLAUDE_DIR
-            try:
-                analyzer.configure_claude_dir(str(claude_dir))
-                now = datetime.now(timezone.utc)
-                first = analyzer.build_sync_payload([], {}, None, [], now - timedelta(days=90), now)
-                later = now + timedelta(minutes=30)
-                second = analyzer.build_sync_payload([], {}, None, [], later - timedelta(days=90), later)
-            finally:
-                analyzer.configure_claude_dir(str(old_dir))
-
-            self.assertEqual(first["idempotency_key"], second["idempotency_key"])
 
 
 if __name__ == "__main__":

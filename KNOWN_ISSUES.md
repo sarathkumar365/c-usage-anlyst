@@ -18,10 +18,11 @@ Status values: `open`, `in-progress`, `fixed`, `deferred`, `wontfix`, `unverifie
 | KI-08 | Medium | Discovery | False-positive sources from generic metadata names | deferred |
 | KI-09 | High | Release | Untracked `claude_usage/` package breaks builds and Python fallback | fixed |
 | KI-10 | Low | Collector | Preflight "Last sync" always shows "never" | fixed |
-| KI-11 | Low | Database | `schema.sql` not re-runnable | deferred |
-| KI-12 | Medium | Dashboard | Silent row truncation from PostgREST `max_rows` | deferred |
+| KI-11 | Low | Database | `schema.sql` not re-runnable | fixed |
+| KI-12 | Medium | Dashboard | Silent row truncation from PostgREST `max_rows` | fixed |
 | KI-13 | Low | Ingest | Malformed JSON returns unhandled 500 | fixed |
-| KI-14 | Low | Repo hygiene | Committed plist contains a developer-local path | deferred |
+| KI-14 | Low | Repo hygiene | Committed plist contains a developer-local path | fixed |
+| KI-16 | Medium | Data integrity | Subagent transcripts merged into parent sessions | fixed |
 | KI-15 | Unknown | Data integrity | Cross-file request duplication may double-count | unverified |
 
 ---
@@ -106,6 +107,7 @@ Status values: `open`, `in-progress`, `fixed`, `deferred`, `wontfix`, `unverifie
 - **File:** `supabase/schema.sql`
 - **Problem:** Early `create policy` statements lack `drop policy if exists`; re-applying the file (e.g. to pick up new tables/views) errors on the first existing policy.
 - **Fix direction:** Add `drop policy if exists` before each, or move to versioned migrations.
+- **Resolution (2026-09-14):** Every policy is preceded by `drop policy if exists`; `schema.sql` was applied twice in a row to a fresh Postgres 17 without errors. Incremental changes now live in `supabase/migrations/`.
 
 ## KI-12 — Silent row truncation from PostgREST `max_rows`
 
@@ -113,6 +115,7 @@ Status values: `open`, `in-progress`, `fixed`, `deferred`, `wontfix`, `unverifie
 - **Problem:** Queries request `limit: 10000`, but Supabase's default API `max_rows` is 1000. No pagination or truncation warning.
 - **Impact:** Totals and charts silently undercount once views exceed 1000 rows.
 - **Fix direction:** Paginate with `.range()`, aggregate server-side, or detect `count` vs returned length.
+- **Resolution (2026-09-14):** The rebuilt dashboard pages every view with `.range()` and a stable ordering.
 
 ## KI-13 — Malformed JSON returns unhandled 500
 
@@ -125,6 +128,14 @@ Status values: `open`, `in-progress`, `fixed`, `deferred`, `wontfix`, `unverifie
 - **File:** `install/com.internal.claude-usage-agent.plist`
 - **Problem:** Hardcodes `/Users/sarathkumar/...`; the installer generates its own plist, so this file is unused and misleading.
 - **Fix direction:** Delete, or convert to a template with placeholders.
+- **Resolution (2026-09-14):** Deleted; `install.sh` generates the plist.
+
+## KI-16 — Subagent transcripts merged into parent sessions
+
+- **File:** `claude_usage/transcripts.py` `parse_all`
+- **Problem:** Subagent transcripts live under the parent session's folder, so `session_id_from_path` returned the parent's id and their requests were bucketed into the parent session; `is_subagent` came from whichever request sorted first. The live database had zero subagent sessions.
+- **Impact:** Subagent work was invisible and parent sessions were inflated, so "why usage is high" could never cite subagents.
+- **Resolution (2026-09-14):** Subagent sessions are keyed `<parent>:<agent-id>` (test: `test_subagent_transcripts_are_separate_sessions`). Existing merged parent rows correct themselves on the next sync; subagent rows appear alongside.
 
 ## KI-15 — Cross-file request duplication may double-count (unverified)
 
@@ -147,6 +158,18 @@ Order matters:
 3. Deploy the `enroll` and `ingest` functions, keeping `verify_jwt = false` as they are now.
 4. Merge the branch to `main`, then tag a release (e.g. `v0.5.0`) so the agent binaries include `claude_usage/` and send the secret header.
 5. Existing installs keep syncing with their current tokens. Only new enrollments need the secret.
+
+## Structure refactor (2026-09-14, v0.6.0)
+
+The 2,335-line `claude_usage_analyzer.py` was split into one module per flow (see README "How It Is Organized"). This makes the remaining deferred issues single-module changes:
+
+- KI-06 (identity) -> `claude_usage/identity.py`
+- KI-07 (activity rows) -> `claude_usage/activity.py`
+- KI-08 (discovery false positives) -> `claude_usage/discovery.py`
+- KI-12 (dashboard row cap) -> `dashboard/index.html` `fetchView`
+- KI-15 (cross-file duplicates) -> `claude_usage/transcripts.py` `parse_all`
+
+Behavior-preserving intent was verified by byte-identical CLI output (19 scenarios, Python source and PyInstaller binary) against the pre-refactor monolith, and row-identical dashboard views on the live database.
 
 ## Not reviewed
 

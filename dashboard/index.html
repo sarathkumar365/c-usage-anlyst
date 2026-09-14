@@ -3,971 +3,1313 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Claude Usage Dashboard</title>
+  <title>Claude Usage</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     :root {
       color-scheme: light;
-      --bg: #f4f6f8;
-      --surface: #ffffff;
-      --surface-2: #f9fafb;
-      --ink: #111827;
-      --muted: #667085;
-      --line: #d8dee8;
-      --line-soft: #edf0f4;
-      --blue: #1d4ed8;
-      --blue-soft: #e8efff;
-      --green: #087443;
-      --green-soft: #e7f6ec;
-      --yellow: #a15c07;
-      --yellow-soft: #fff3d6;
-      --red: #b42318;
-      --red-soft: #fee4e2;
-      --shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+      --page: #f6f5f1;
+      --surface: #fcfcfb;
+      --sunken: #f9f8f5;
+      --hover: #f3f2ed;
+      --chip: #ecebe5;
+      --ink: #171614;
+      --ink-2: #4a4843;
+      --ink-3: #5f5d57;
+      --muted: #8e8b84;
+      --line: #e5e3dc;
+      --line-soft: #ecebe5;
+      --line-strong: #dcd9cf;
+      --data: #2a78d6;
+      --data-dark: #1c5cab;
+      --good: #0ca30c;
+      --warn: #e39a00;
+      --bad: #d03b3b;
+      --alert-ink: #a6441f;
+      --sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+      --serif: "Newsreader", "Iowan Old Style", Georgia, serif;
     }
     * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: var(--bg);
-      color: var(--ink);
-    }
-    header {
-      display: grid;
-      grid-template-columns: minmax(220px, 1fr) auto;
-      gap: 16px;
-      align-items: center;
-      padding: 18px 24px;
-      background: var(--surface);
-      border-bottom: 1px solid var(--line);
-      position: sticky;
-      top: 0;
-      z-index: 4;
-    }
-    h1 { margin: 0; font-size: 18px; font-weight: 760; letter-spacing: 0; }
-    h2 { margin: 0; font-size: 14px; font-weight: 760; color: #344054; letter-spacing: 0; }
-    h3 { margin: 0; font-size: 13px; font-weight: 760; color: #344054; letter-spacing: 0; }
-    main { max-width: 1440px; margin: 0 auto; padding: 18px 24px 32px; }
-    button, input, select {
-      font: inherit;
-      border-radius: 6px;
-    }
-    button {
-      min-height: 36px;
-      border: 1px solid #1d4ed8;
-      background: var(--blue);
-      color: #fff;
-      font-weight: 700;
-      padding: 7px 12px;
-      cursor: pointer;
-      white-space: nowrap;
-    }
-    button.secondary {
-      background: #fff;
-      color: #344054;
-      border-color: var(--line);
-    }
-    button.ghost {
-      background: transparent;
-      border-color: transparent;
-      color: var(--blue);
-      min-height: 28px;
-      padding: 3px 6px;
-    }
-    input, select {
-      min-height: 36px;
-      border: 1px solid var(--line);
-      background: #fff;
-      color: var(--ink);
-      padding: 7px 10px;
-      width: 100%;
-    }
-    label { display: grid; gap: 5px; font-size: 12px; color: var(--muted); }
-    .status { font-size: 13px; color: var(--muted); text-align: right; }
-    .toolbar {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      align-items: end;
-      justify-content: flex-end;
-    }
-    .toolbar label { width: 150px; }
-    .setup {
-      display: grid;
-      grid-template-columns: minmax(240px, 1.5fr) minmax(280px, 2fr) minmax(120px, 0.8fr) minmax(220px, 1.2fr) auto auto;
-      gap: 10px;
-      align-items: end;
-      margin-bottom: 18px;
-    }
-    .band {
-      background: var(--surface);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      box-shadow: var(--shadow);
-      padding: 14px;
-      margin-bottom: 16px;
-    }
-    .section-head {
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      align-items: center;
-      margin-bottom: 12px;
-    }
-    .metrics {
-      display: grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
-      gap: 10px;
-    }
-    .metric {
-      border: 1px solid var(--line-soft);
-      border-radius: 8px;
-      padding: 12px;
-      background: var(--surface-2);
-      min-height: 86px;
-    }
-    .metric-label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
-    .metric-value { font-size: 24px; line-height: 1.1; font-weight: 800; white-space: nowrap; }
-    .metric-note { color: var(--muted); font-size: 12px; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .layout {
-      display: grid;
-      grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.65fr);
-      gap: 16px;
-      align-items: start;
-    }
-    .layout > *, .split > *, .stack, .band { min-width: 0; }
-    .stack { display: grid; gap: 16px; }
-    .split {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-      gap: 16px;
-    }
-    .table-wrap {
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      overflow: auto;
-      background: var(--surface);
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      min-width: 760px;
-    }
-    th, td {
-      padding: 10px 12px;
-      border-bottom: 1px solid var(--line-soft);
-      text-align: left;
-      font-size: 13px;
-      vertical-align: middle;
-    }
-    th {
-      position: sticky;
-      top: 0;
-      background: #fbfcfe;
-      color: var(--muted);
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: 0;
-      z-index: 1;
-    }
-    tr:last-child td { border-bottom: 0; }
-    tbody tr { cursor: pointer; }
-    tbody tr:hover { background: #f8fbff; }
-    tbody tr.selected { background: var(--blue-soft); }
-    .name { font-weight: 750; color: #101828; }
-    .subtle { color: var(--muted); font-size: 12px; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      border-radius: 999px;
-      padding: 3px 8px;
-      font-size: 12px;
-      font-weight: 700;
-      white-space: nowrap;
-    }
-    .badge.good { color: var(--green); background: var(--green-soft); }
-    .badge.warn { color: var(--yellow); background: var(--yellow-soft); }
-    .badge.bad { color: var(--red); background: var(--red-soft); }
-    .badge.neutral { color: #344054; background: #eef2f7; }
-    .bar {
-      height: 8px;
-      width: 100%;
-      min-width: 84px;
-      background: #eaecf0;
-      border-radius: 999px;
-      overflow: hidden;
-    }
-    .bar > span { display: block; height: 100%; background: var(--blue); border-radius: inherit; }
-    .driver-list { display: grid; gap: 10px; }
-    .driver {
-      display: grid;
-      grid-template-columns: auto 1fr auto;
-      gap: 10px;
-      align-items: center;
-      border-bottom: 1px solid var(--line-soft);
-      padding-bottom: 10px;
-    }
-    .driver:last-child { border-bottom: 0; padding-bottom: 0; }
-    .empty {
-      color: var(--muted);
-      font-size: 13px;
-      padding: 18px;
-      border: 1px dashed var(--line);
-      border-radius: 8px;
-      background: var(--surface-2);
-    }
-    dialog {
-      width: min(420px, calc(100vw - 32px));
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      box-shadow: 0 18px 60px rgba(16, 24, 40, 0.22);
-      padding: 0;
-    }
-    dialog::backdrop { background: rgba(17, 24, 39, 0.32); }
-    .modal-body { padding: 16px; display: grid; gap: 12px; }
-    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; padding: 12px 16px; border-top: 1px solid var(--line); }
-    .good { color: var(--green); }
-    .warn { color: var(--yellow); }
-    .bad { color: var(--red); }
-    @media (max-width: 1100px) {
-      header, .layout, .split { grid-template-columns: 1fr; }
-      .status { text-align: left; }
-      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .setup { grid-template-columns: 1fr 1fr; }
-    }
-    @media (max-width: 680px) {
-      main { padding: 14px; }
-      .metrics, .setup { grid-template-columns: 1fr; }
-      .toolbar { justify-content: stretch; }
-      .toolbar label, .toolbar button { width: 100%; }
-      table { min-width: 680px; }
+    html, body { margin: 0; height: 100%; }
+    body { background: var(--page); color: var(--ink); font-family: var(--sans); font-size: 14px; -webkit-font-smoothing: antialiased; }
+    button, input { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    a { color: var(--ink); text-underline-offset: 3px; }
+    .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+    .serif { font-family: var(--serif); }
+    .muted { color: var(--muted); }
+    .ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    .app { display: grid; grid-template-columns: 232px minmax(0, 1fr); height: 100vh; }
+    .sidebar { display: flex; flex-direction: column; border-right: 1px solid var(--line); padding: 20px 12px 16px; min-height: 0; }
+    .brand { display: flex; align-items: center; gap: 10px; padding: 0 8px 20px; }
+    .brand-mark { width: 22px; height: 22px; border-radius: 6px; background: var(--ink); display: grid; place-items: center; flex-shrink: 0; }
+    .brand-name { display: flex; flex-direction: column; gap: 1px; }
+    .brand-name strong { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+    .brand-name span { font-size: 12px; color: var(--muted); }
+    .nav { display: flex; flex-direction: column; gap: 2px; }
+    .nav-group { padding: 16px 8px 6px; font-size: 11px; color: var(--muted); letter-spacing: 0.04em; }
+    .nav-group:first-child { padding-top: 0; }
+    .nav-item { display: flex; align-items: center; gap: 10px; padding: 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-3); font-size: 13px; text-align: left; width: 100%; }
+    .nav-item:hover { background: var(--chip); }
+    .nav-item[aria-current="page"] { background: #e7e5de; color: var(--ink); font-weight: 500; }
+    .nav-item span:first-of-type { flex-grow: 1; }
+    .badge { font-family: var(--mono); font-size: 11px; color: #9a5b00; background: #fbefd5; border-radius: 4px; padding: 1px 6px; }
+    .sidebar-foot { margin-top: auto; border-top: 1px solid var(--line); padding: 12px 8px 0; display: flex; align-items: center; gap: 10px; }
+    .avatar { width: 28px; height: 28px; border-radius: 14px; background: var(--chip); display: grid; place-items: center; font-size: 11px; font-weight: 600; color: var(--ink-3); flex-shrink: 0; }
+    .sidebar-foot .who { display: flex; flex-direction: column; min-width: 0; font-size: 12px; }
+    .link-btn { border: 0; background: none; padding: 0; color: var(--muted); font-size: 11px; text-align: left; }
+    .link-btn:hover { color: var(--ink); text-decoration: underline; }
+
+    .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+    .topbar { height: 64px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 32px; border-bottom: 1px solid var(--line); }
+    .topbar h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.015em; }
+    .topbar .title { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+    .topbar .tools { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+    .content { flex-grow: 1; overflow: auto; padding: 28px 32px 48px; }
+    .divider { width: 1px; height: 20px; background: var(--line); }
+
+    .seg { display: inline-flex; gap: 2px; background: var(--chip); border-radius: 7px; padding: 2px; }
+    .seg button { height: 28px; padding: 0 10px; border: 0; border-radius: 5px; background: transparent; color: var(--ink-3); font-size: 12px; }
+    .seg button:hover { color: var(--ink); }
+    .seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(23, 22, 20, 0.08); }
+    .btn { height: 32px; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid #e0ded6; background: var(--surface); border-radius: 7px; font-size: 13px; }
+    .btn:hover { background: #efeee9; }
+    .btn.icon { width: 32px; padding: 0; justify-content: center; color: var(--ink-3); }
+    .btn.primary { background: var(--ink); color: var(--page); border-color: var(--ink); }
+    .btn.primary:hover { background: #2c2a26; }
+    .btn[disabled] { opacity: 0.55; cursor: default; }
+    .input { height: 32px; padding: 0 10px; border: 1px solid #e0ded6; border-radius: 7px; background: var(--surface); font-size: 13px; width: 100%; }
+    .input:focus { outline: none; border-color: var(--ink); }
+    .input::placeholder { color: #a3a09a; }
+    .spin { animation: spin 900ms linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+    .view { animation: rise 200ms ease-out; }
+
+    .panel { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+    .panel-head { padding: 18px 20px 14px; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+    .panel-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
+    .kicker { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+    .dot { width: 7px; height: 7px; border-radius: 4px; flex-shrink: 0; display: inline-block; }
+    .status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+    .bar { height: 6px; background: #efeee9; border-radius: 3px; flex-grow: 1; min-width: 24px; }
+    .bar > div { height: 6px; background: var(--data); border-radius: 3px; }
+    .empty { padding: 48px 20px; text-align: center; color: var(--muted); font-size: 14px; }
+    .notice { padding: 12px 16px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--sunken); color: var(--ink-3); font-size: 13px; margin-bottom: 20px; }
+    .notice.error { border-color: #efc9bd; background: #fbf0ec; color: var(--alert-ink); }
+
+    /* Tables */
+    .table { width: 100%; overflow-x: auto; }
+    .trow { display: grid; gap: 16px; align-items: center; padding: 12px 20px; border-top: 1px solid var(--line-soft); min-width: 760px; }
+    .trow.head { padding: 9px 20px; font-size: 12px; color: var(--muted); background: var(--sunken); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .trow.head + .trow { border-top: 0; }
+    .trow.clickable { cursor: pointer; }
+    .trow.clickable:hover { background: var(--hover); }
+    .num { text-align: right; }
+    .tokens-cell { display: flex; align-items: center; gap: 12px; }
+    .tokens-cell .mono:first-child { width: 56px; }
+    .tokens-cell .mono:last-child { width: 40px; text-align: right; font-size: 12px; color: var(--muted); }
+    .person-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .person-cell .avatar { width: 28px; height: 28px; }
+    .stack { display: flex; flex-direction: column; min-width: 0; }
+    .sub { font-size: 11px; color: var(--muted); }
+    .tag { font-size: 11px; color: var(--ink-3); border: 1px solid #e0ded6; border-radius: 4px; padding: 0 5px; }
+
+    /* Brief */
+    .brief-hero { display: grid; grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr); gap: 48px; padding: 4px 0 32px; border-bottom: 1px solid var(--line-strong); }
+    .brief-hero h2 { margin: 18px 0; font-family: var(--serif); font-size: clamp(32px, 3.4vw, 48px); line-height: 1.06; font-weight: 400; letter-spacing: -0.02em; text-wrap: balance; }
+    .brief-hero h2 button { border: 0; background: none; padding: 0; font: inherit; letter-spacing: inherit; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 7px; text-decoration-color: #c9c6bd; }
+    .brief-hero h2 button:hover { text-decoration-color: var(--ink); }
+    .dek { margin: 0; max-width: 620px; font-size: 16px; line-height: 1.6; color: var(--ink-2); text-wrap: pretty; }
+    .ranking { border-left: 1px solid var(--line-strong); padding-left: 28px; display: flex; flex-direction: column; }
+    .rank-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) 52px; gap: 10px; align-items: center; padding: 6px 8px; margin: 0 -8px; border: 0; border-radius: 6px; background: none; text-align: left; }
+    .rank-row:hover { background: var(--hover); }
+    .rank-row .rule { height: 2px; background: var(--ink); margin-top: 5px; }
+    .rank-row.minor .rule { background: #a3a09a; }
+    .rank-row.minor .name, .rank-row.minor .mono { color: var(--ink-3); }
+    .stories { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); padding-top: 26px; }
+    .story { display: flex; flex-direction: column; gap: 10px; padding: 0 28px; border: 0; border-right: 1px solid var(--line-strong); background: none; text-align: left; }
+    .story:first-child { padding-left: 0; }
+    .story:last-child { padding-right: 0; border-right: 0; }
+    .story h3 { margin: 0; font-family: var(--serif); font-size: 24px; line-height: 1.14; font-weight: 500; letter-spacing: -0.01em; text-wrap: balance; }
+    .story:hover h3 { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px; }
+    .story p { margin: 0; font-size: 14px; line-height: 1.6; color: var(--ink-2); text-wrap: pretty; }
+    .story .kicker.alert { color: var(--alert-ink); }
+    .spark { display: flex; align-items: flex-end; gap: 3px; height: 28px; margin-top: 4px; }
+    .spark div { flex: 1 1 0; background: #bdb9ae; min-height: 1px; }
+    .spark div.peak { background: var(--ink); }
+    .brief-foot { margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--line-strong); display: flex; justify-content: space-between; gap: 24px; font-size: 13px; color: var(--ink-3); }
+
+    /* Share */
+    .field { position: relative; width: 100%; height: min(700px, calc(100vh - 190px)); min-height: 460px; }
+    .tile { position: absolute; display: flex; flex-direction: column; overflow: hidden; border: 0; padding: 0; text-align: left; transition: filter 160ms ease; }
+    .tile:hover { filter: brightness(1.07); }
+    .tile-body { flex-grow: 1; min-height: 0; display: flex; flex-direction: column; justify-content: space-between; gap: 10px; }
+    .tile-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 8px 12px; }
+    .tile-lines { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+    .tile-strip { display: flex; gap: 2px; height: 32px; flex-shrink: 0; }
+    .tile-strip div { min-width: 0; display: flex; align-items: center; padding: 0 12px; font-size: 12px; font-family: var(--mono); white-space: nowrap; overflow: hidden; }
+    .flag { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; background: #f1efe9; color: var(--alert-ink); padding: 4px 8px; }
+
+    /* Work lanes */
+    .lanes { background: #141413; color: #ecebe6; border-radius: 12px; padding: 18px 24px 8px; }
+    .lanes-head { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding-bottom: 14px; border-bottom: 1px solid #262523; font-size: 13px; color: #b9b6ad; flex-wrap: wrap; }
+    .legend { display: flex; align-items: center; gap: 18px; font-size: 12px; color: #8f8c84; }
+    .legend span { display: inline-flex; align-items: center; gap: 8px; }
+    .swatch { width: 14px; height: 8px; border-radius: 2px; display: inline-block; }
+    .lane-axis { display: grid; grid-template-columns: 264px minmax(0, 1fr); height: 34px; align-items: center; }
+    .lane-track { position: relative; height: 100%; }
+    .lane-body { position: relative; }
+    .lane-bands { position: absolute; left: 264px; right: 0; top: 0; bottom: 0; pointer-events: none; }
+    .lane { display: grid; grid-template-columns: 248px minmax(0, 1fr); column-gap: 16px; height: 96px; border-top: 1px solid #262523; }
+    .lane-name { display: flex; flex-direction: column; gap: 4px; padding: 12px 8px 0; margin-left: -8px; border: 0; border-radius: 6px; background: none; color: inherit; text-align: left; min-width: 0; }
+    .lane-name:hover { background: #1f1e1c; }
+    .lane-sessions { position: relative; }
+    .session-bar { position: absolute; border-radius: 3px; background: #5e5b55; }
+    .session-bar.heavy { background: #3987e5; }
+    .session-bar.sub { background: transparent; box-shadow: inset 0 0 0 1.5px #8f8c84; height: 10px; }
+    .callout-line { position: absolute; top: 8px; width: 1px; background: #6f6c65; }
+    .callout { position: absolute; top: 2px; font-family: var(--mono); font-size: 11px; color: #ecebe6; white-space: nowrap; transform: translateX(calc(-100% - 6px)); }
+    .stale-band { position: absolute; top: 16px; height: 68px; background: repeating-linear-gradient(135deg, rgba(210, 81, 42, 0.45) 0 1px, transparent 1px 6px); border-left: 1px solid #d2512a; }
+    .stale-label { position: absolute; top: 2px; font-size: 11px; color: #e07a55; white-space: nowrap; transform: translateX(calc(-100% - 6px)); }
+
+    /* Collectors & stats */
+    .stat-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .stat-strip > div { padding: 18px 20px; display: flex; flex-direction: column; gap: 4px; border-right: 1px solid var(--line-soft); }
+    .stat-strip > div:last-child { border-right: 0; }
+    .stat-strip strong { font-size: 22px; font-weight: 500; letter-spacing: -0.02em; }
+    .issue { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 12px 0; border-top: 1px solid var(--line-soft); }
+    .issue-icon { width: 20px; height: 20px; border-radius: 10px; display: grid; place-items: center; }
+    .mix { display: flex; gap: 2px; height: 10px; }
+    .mix div { min-width: 3px; }
+
+    /* Drawer */
+    .scrim { position: fixed; inset: 0; background: rgba(23, 22, 20, 0.16); z-index: 10; }
+    .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 100vw); background: var(--surface); border-left: 1px solid var(--line); box-shadow: -12px 0 32px rgba(23, 22, 20, 0.08); display: flex; flex-direction: column; z-index: 11; animation: slide 200ms ease-out; }
+    @keyframes slide { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+    .drawer-head { padding: 20px 24px 18px; border-bottom: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 14px; }
+    .drawer-why { padding: 16px 24px; border-bottom: 1px solid var(--line-soft); background: var(--sunken); display: flex; flex-direction: column; gap: 8px; }
+    .reason { display: flex; gap: 8px; font-size: 13px; color: #3d3b37; line-height: 1.4; }
+    .reason::before { content: ""; width: 4px; height: 4px; border-radius: 2px; background: #b9b6ad; flex-shrink: 0; margin-top: 7px; }
+    .drawer-body { flex-grow: 1; overflow: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 24px; }
+    .kv { display: flex; justify-content: space-between; gap: 16px; padding: 9px 0; border-top: 1px solid var(--line-soft); font-size: 13px; }
+    .kv span:first-child { color: var(--ink-3); }
+    .big-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+    .big-stats div { display: flex; flex-direction: column; gap: 4px; }
+    .big-stats strong { font-size: 22px; font-weight: 500; letter-spacing: -0.02em; }
+
+    /* Sign in */
+    .signin { min-height: 100vh; display: flex; flex-direction: column; }
+    .signin header { height: 64px; display: flex; align-items: center; gap: 10px; padding: 0 32px; }
+    .signin main { flex-grow: 1; display: grid; place-items: center; padding: 24px 24px 88px; }
+    .signin-card { width: min(360px, 100%); display: flex; flex-direction: column; gap: 28px; }
+    .signin-card h1 { margin: 0; font-size: 26px; font-weight: 500; letter-spacing: -0.025em; }
+    .signin-card label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--ink-3); }
+    .signin-card .input, .signin-card .btn { height: 40px; font-size: 14px; }
+    .signin-card .btn { justify-content: center; }
+
+    @media (max-width: 960px) {
+      .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); height: auto; min-height: 100vh; }
+      .sidebar { flex-direction: row; align-items: center; gap: 8px; padding: 10px 16px; border-right: 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
+      .brand { padding: 0 8px 0 0; }
+      .brand-name span, .nav-group, .sidebar-foot { display: none; }
+      .nav { flex-direction: row; }
+      .nav-item { white-space: nowrap; }
+      .topbar { height: auto; flex-wrap: wrap; padding: 14px 16px; }
+      .topbar .tools { width: 100%; }
+      .topbar .divider, .topbar .updated, .topbar .btn-label, .topbar .title .muted { display: none; }
+      .content { padding: 20px 16px 40px; overflow: visible; }
+      .brief-hero, .stories { grid-template-columns: minmax(0, 1fr); }
+      .ranking { border-left: 0; padding-left: 0; }
+      .story { padding: 20px 0; border-right: 0; border-top: 1px solid var(--line-strong); }
+      .stat-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .lanes { overflow-x: auto; }
+      .lane-axis, .lane-body { min-width: 860px; }
     }
   </style>
 </head>
 <body>
-  <header>
-    <div>
-      <h1>Claude Usage Operations</h1>
-      <div class="subtle" id="headline">Attribution, drivers, and collector health for team-main</div>
-    </div>
-    <div class="status" id="status">Not connected</div>
-  </header>
-
-  <main>
-    <section class="band">
-      <div class="setup">
-        <label>Supabase URL <input id="supabaseUrl" placeholder="https://xxx.supabase.co"></label>
-        <label>Publishable key <input id="anonKey" placeholder="sb_publishable_..."></label>
-        <label>Org ID <input id="orgId" placeholder="team-main"></label>
-        <label>Email <input id="email" placeholder="you@company.com"></label>
-        <button id="save">Save</button>
-        <button id="login" class="secondary">Send login link</button>
-      </div>
-      <div class="toolbar">
-        <label>Window
-          <select id="windowDays">
-            <option value="7">Last 7 days</option>
-            <option value="30" selected>Last 30 days</option>
-            <option value="90">Last 90 days</option>
-            <option value="all">All time</option>
-          </select>
-        </label>
-        <label>Surface
-          <select id="surfaceFilter">
-            <option value="all" selected>All surfaces</option>
-            <option value="claude_code">Claude Code</option>
-            <option value="desktop_chat">Desktop Chat</option>
-            <option value="cowork">Cowork</option>
-            <option value="extensions">Extensions</option>
-          </select>
-        </label>
-        <button id="refresh">Refresh</button>
-        <button id="exportPeople" class="secondary">Export people</button>
-        <button id="exportProjects" class="secondary">Export projects</button>
-        <button id="exportModels" class="secondary">Export models</button>
-      </div>
-    </section>
-
-    <section class="metrics" id="metrics"></section>
-
-    <div class="layout">
-      <div class="stack">
-        <section class="band">
-          <div class="section-head">
-            <h2>People And Machines</h2>
-            <span class="subtle" id="peopleCount">No data loaded</span>
-          </div>
-          <div class="table-wrap"><table id="people"></table></div>
-        </section>
-
-        <section class="split">
-          <div class="band">
-            <div class="section-head">
-              <h2>Person -> Project</h2>
-              <button id="clearSelection" class="ghost">Show team</button>
-            </div>
-            <div class="table-wrap"><table id="projects"></table></div>
-          </div>
-          <div class="band">
-            <div class="section-head">
-              <h2>Person -> Model</h2>
-              <span class="subtle">Attributed model mix</span>
-            </div>
-            <div class="table-wrap"><table id="models"></table></div>
-          </div>
-        </section>
-
-        <section class="band">
-          <div class="section-head">
-            <h2>High Usage Sessions</h2>
-            <span class="subtle">Highest-token work, attributed</span>
-          </div>
-          <div class="table-wrap"><table id="sessions"></table></div>
-        </section>
-
-        <section class="band">
-          <div class="section-head">
-            <h2>Claude Sources</h2>
-            <span class="subtle" id="sourceCount">No source data loaded</span>
-          </div>
-          <div class="table-wrap"><table id="sources"></table></div>
-        </section>
-
-        <section class="band">
-          <div class="section-head">
-            <h2>Claude Activity</h2>
-            <span class="subtle">Derived and evidence-based activity</span>
-          </div>
-          <div class="table-wrap"><table id="activity"></table></div>
-        </section>
-      </div>
-
-      <aside class="stack">
-        <section class="band">
-          <div class="section-head">
-            <h2>Usage Drivers</h2>
-            <span class="subtle" id="driverScope">Team</span>
-          </div>
-          <div class="driver-list" id="drivers"></div>
-        </section>
-
-        <section class="band">
-          <div class="section-head">
-            <h2>Selected Person</h2>
-            <span class="subtle" id="selectedScope">Team view</span>
-          </div>
-          <div id="personDetail" class="empty">Select a person to inspect their projects, models, machine, and collector health.</div>
-        </section>
-
-        <section class="band">
-          <div class="section-head">
-            <h2>Anomalies</h2>
-            <span class="subtle" id="anomalyCount">0 open</span>
-          </div>
-          <div class="table-wrap"><table id="anomalies"></table></div>
-        </section>
-      </aside>
-    </div>
-  </main>
-
-  <dialog id="aliasDialog">
-    <form method="dialog">
-      <div class="modal-body">
-        <h2 id="aliasTitle">Edit Alias</h2>
-        <div class="subtle" id="aliasMeta"></div>
-        <label>Display name <input id="aliasName" autocomplete="off"></label>
-        <div class="subtle">Leave blank and save to remove the alias. The fallback label will be used.</div>
-      </div>
-      <div class="modal-actions">
-        <button value="cancel" class="secondary">Cancel</button>
-        <button id="aliasSave" value="default">Save</button>
-      </div>
-    </form>
-  </dialog>
-
+  <div id="app"></div>
   <script>
-    const $ = (id) => document.getElementById(id);
-    const DEFAULT_SUPABASE_URL = "https://yeokmzmmldqjngwtrfso.supabase.co";
-    const DEFAULT_PUBLISHABLE_KEY = "sb_publishable_0NqZnygxACHzi6jMGr2sJA_1TOPXFId";
-    const DEFAULT_ORG_ID = "team-main";
-    const STALE_MS = 2 * 60 * 60 * 1000;
-    let client = null;
-    let selectedKey = null;
-    let aliasTarget = null;
-    let exportRows = { people: [], projects: [], models: [], sources: [], activity: [] };
-
-    const fmt = (n) => {
-      n = Number(n || 0);
-      if (Math.abs(n) >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
-      if (Math.abs(n) >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
-      if (Math.abs(n) >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
-      return `${Math.round(n)}`;
+    // ---------------------------------------------------------------------------
+    // Config
+    // ---------------------------------------------------------------------------
+    const DEFAULTS = {
+      supabaseUrl: "https://yeokmzmmldqjngwtrfso.supabase.co",
+      supabaseKey: "sb_publishable_0NqZnygxACHzi6jMGr2sJA_1TOPXFId",
+      orgId: "team-main",
     };
-    const pct = (n) => `${(Number(n || 0) * 100).toFixed(1)}%`;
+    const STALE_MS = 2 * 60 * 60 * 1000;
+    const DAY_MS = 86400000;
+    const RANGES = [
+      { id: "7", label: "7d", days: 7, kicker: "This week" },
+      { id: "30", label: "30d", days: 30, kicker: "This month" },
+      { id: "90", label: "90d", days: 90, kicker: "This quarter" },
+      { id: "all", label: "All", days: null, kicker: "All time" },
+    ];
+    const ICONS = {
+      brief: "M3 3.5h10M3 6.5h10M3 9.5h6.5M3 12.5h8",
+      share: "M2.5 2.5h6v11h-6zM10.5 2.5h3v5h-3zM10.5 9.5h3v4h-3z",
+      lanes: "M2.5 4h7M5 8h8.5M2.5 12h4.5",
+      people: "M6 7.2a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8zM1.8 13.5c.4-2.4 2.1-3.8 4.2-3.8s3.8 1.4 4.2 3.8M10.6 2.7a2.3 2.3 0 0 1 0 4.4M12 9.9c1.2.5 2 1.7 2.2 3.6",
+      projects: "M2 4.2c0-.7.5-1.2 1.2-1.2h3l1.5 1.6h5.1c.7 0 1.2.5 1.2 1.2v6c0 .7-.5 1.2-1.2 1.2H3.2c-.7 0-1.2-.5-1.2-1.2z",
+      sessions: "M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12zM8 4.8V8l2.2 1.4",
+      collectors: "M2.5 3h11v4h-11zM2.5 9h11v4h-11zM5 5h.01M5 11h.01",
+    };
+    const TABS = [
+      { group: "Views" },
+      { id: "brief", label: "Brief", subtitle: "Who is using the most, and why" },
+      { id: "share", label: "Share", subtitle: "Everyone’s slice of the team’s usage" },
+      { id: "lanes", label: "Work lanes", subtitle: "How each person worked over the last 7 days" },
+      { group: "Data" },
+      { id: "people", label: "People", subtitle: "Who is using Claude, and on which machine" },
+      { id: "projects", label: "Projects & models", subtitle: "Where the tokens go" },
+      { id: "sessions", label: "Sessions", subtitle: "The heaviest individual pieces of work" },
+      { id: "collectors", label: "Collectors", subtitle: "Sync health and what each machine can see" },
+    ];
+    const MODEL_COLORS = ["#2a78d6", "#eb6834", "#1baf7a"];
+    const OTHER_COLOR = "#b9b6ad";
+    const INK_SCALE = ["#1d1c19", "#3a3833", "#55524c", "#726f68", "#a29e94", "#c4c0b5", "#d9d5cb"];
+
+    // ---------------------------------------------------------------------------
+    // State & storage
+    // ---------------------------------------------------------------------------
+    const store = {
+      get(key, fallback) { try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; } },
+      set(key, value) { try { localStorage.setItem(key, value); } catch { /* storage unavailable */ } },
+    };
+    const state = {
+      config: {
+        supabaseUrl: store.get("supabaseUrl", DEFAULTS.supabaseUrl),
+        supabaseKey: store.get("anonKey", DEFAULTS.supabaseKey),
+        orgId: store.get("orgId", DEFAULTS.orgId),
+      },
+      tab: store.get("tab", "brief"),
+      range: store.get("range", "30"),
+      lens: "people",
+      sessionFilter: "all",
+      query: "",
+      selected: null,
+      editing: false,
+      draft: "",
+      user: null,
+      authChecked: false,
+      loading: false,
+      error: null,
+      raw: null,
+      loadedAt: null,
+      signin: { email: store.get("email", ""), sent: false, sending: false, error: null, showConnection: false },
+    };
+    let client = null;
+    let model = null;
+
+    // ---------------------------------------------------------------------------
+    // Formatting
+    // ---------------------------------------------------------------------------
     const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
-    const compactId = (value) => String(value || "").slice(0, 10);
-    const keyOf = (row) => [row.user_id, row.machine_id, row.collector_id, row.account_label || ""].join("|");
-    const sameIdentity = (row, key) => !key || keyOf(row) === key;
-    const selectedSurface = () => $("surfaceFilter").value;
-    const surfaceLabel = (value) => ({
-      claude_code: "Claude Code",
-      desktop_chat: "Desktop Chat",
-      desktop_app: "Desktop App",
-      cowork: "Cowork",
-      extensions: "Extensions",
-    }[value] || value || "Unknown");
-    const sameSurface = (row) => selectedSurface() === "all" || row.surface === selectedSurface();
-    const cutoffDay = () => {
-      const value = $("windowDays").value;
-      if (value === "all") return null;
-      const date = new Date();
-      date.setDate(date.getDate() - Number(value));
-      return date.toISOString().slice(0, 10);
+    const num = (value) => Number(value || 0);
+    const compact = (n) => {
+      n = num(n);
+      if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
+      if (n >= 1e6) return (n / 1e6).toFixed(2) + "M";
+      if (n >= 1e4) return Math.round(n / 1e3) + "K";
+      if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+      return String(Math.round(n));
+    };
+    const pct = (x) => (x > 0 && x < 0.01 ? "<1%" : Math.round(x * 100) + "%");
+    const pct1 = (x) => (x * 100).toFixed(1) + "%";
+    const int = (n) => Math.round(num(n)).toLocaleString("en-US");
+    const duration = (seconds) => {
+      const m = Math.round(num(seconds) / 60);
+      if (m < 1) return "<1m";
+      return m >= 60 ? `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m` : `${m}m`;
     };
     const timeAgo = (value) => {
-      if (!value) return "Never";
+      if (!value) return "never";
       const ms = Date.now() - new Date(value).getTime();
-      if (!Number.isFinite(ms)) return "Unknown";
-      if (ms < 60_000) return "Just now";
-      if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m ago`;
-      if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h ago`;
-      return `${Math.round(ms / 86_400_000)}d ago`;
+      if (!Number.isFinite(ms)) return "unknown";
+      if (ms < 60000) return "just now";
+      if (ms < 3600000) return `${Math.round(ms / 60000)} min ago`;
+      if (ms < DAY_MS) return `${Math.round(ms / 3600000)} hr ago`;
+      if (ms < 2 * DAY_MS) return "yesterday";
+      return new Date(value).toLocaleDateString("en-US", { month: "short", day: "numeric" });
     };
-    const healthFor = (row) => {
-      const lastSync = row.last_sync_at ? new Date(row.last_sync_at).getTime() : 0;
-      if (!lastSync || Date.now() - lastSync > STALE_MS) return ["bad", "Stale"];
-      if (Number(row.open_anomalies || 0) > 0 || row.stats_cache_missing) return ["warn", "Needs review"];
-      return ["good", "Healthy"];
+    const modelName = (model) => {
+      const m = String(model || "").match(/^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?/);
+      if (!m) return model || "Unknown model";
+      return `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? "." + m[3] : ""}`;
     };
+    const initials = (name) => String(name || "?").split(/[\s._-]+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
+    const dayKey = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    const startOfDay = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const addDays = (date, days) => new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
+    const icon = (path, size = 16) => `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${path}"></path></svg>`;
+    const countWord = (n) => ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"][n] || String(n);
+    const firstName = (name) => String(name || "").split(" ")[0];
+    // Lowercase a leading ordinary word only; keep names like "Haiku 4.5" or "Bash" intact.
+    const lowerFirst = (text) => (/^(One|Two|Three|Four|Five|Six|Seven|Eight|Nine|Command-heavy|Reads|Mostly|Short|Spread|No)\b/.test(text) ? text.charAt(0).toLowerCase() + text.slice(1) : text);
+    const rangeInfo = () => RANGES.find((r) => r.id === state.range) || RANGES[1];
+    const SURFACE_NAMES = { claude_code: "Code", desktop_chat: "Desktop", desktop_app: "Desktop", cowork: "Cowork", extensions: "Extensions" };
+    const surfaceList = (surfaces) => [...new Set([...surfaces].map((s) => SURFACE_NAMES[s] || s))].join(", ");
+    // platform.release is the kernel version on macOS, so only the OS family and architecture are shown.
+    const platformLabel = (platform) => [{ Darwin: "macOS", Windows: "Windows", Linux: "Linux" }[platform?.system] || platform?.system, platform?.machine].filter(Boolean).join(" · ");
 
-    function loadSettings() {
-      for (const id of ["supabaseUrl", "anonKey", "orgId", "email"]) {
-        $(id).value = localStorage.getItem(id) || "";
-      }
-      if (!$("supabaseUrl").value) $("supabaseUrl").value = DEFAULT_SUPABASE_URL;
-      if (!$("anonKey").value) $("anonKey").value = DEFAULT_PUBLISHABLE_KEY;
-      if (!$("orgId").value) $("orgId").value = DEFAULT_ORG_ID;
-      connect();
-    }
-
+    // ---------------------------------------------------------------------------
+    // Auth
+    // ---------------------------------------------------------------------------
     function connect() {
-      const url = $("supabaseUrl").value.trim();
-      const key = $("anonKey").value.trim();
-      if (!url || !key) return;
-      client = window.supabase.createClient(url, key, {
-        auth: { detectSessionInUrl: true, persistSession: true, autoRefreshToken: true },
-      });
-      $("status").textContent = "Configured";
-      restoreSessionFromUrl().then(updateAuthStatus);
+      const { supabaseUrl, supabaseKey } = state.config;
+      client = supabaseUrl && supabaseKey
+        ? window.supabase.createClient(supabaseUrl, supabaseKey, { auth: { detectSessionInUrl: true, persistSession: true, autoRefreshToken: true } })
+        : null;
     }
 
     async function restoreSessionFromUrl() {
-      if (!client || !window.location.hash) return false;
+      if (!client || !window.location.hash.includes("access_token")) return;
       const params = new URLSearchParams(window.location.hash.slice(1));
-      const accessToken = params.get("access_token");
-      const refreshToken = params.get("refresh_token");
-      if (!accessToken || !refreshToken) return false;
-      const { error } = await client.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
-      if (error) {
-        $("status").textContent = `Sign-in failed: ${error.message}`;
-        return false;
-      }
+      const access_token = params.get("access_token");
+      const refresh_token = params.get("refresh_token");
+      if (access_token && refresh_token) await client.auth.setSession({ access_token, refresh_token });
       history.replaceState(null, document.title, window.location.pathname + window.location.search);
-      return true;
     }
 
-    async function updateAuthStatus() {
+    async function checkAuth() {
       if (!client) return null;
-      const sessionResult = await client.auth.getSession();
-      if (!sessionResult.data?.session && window.location.hash) await restoreSessionFromUrl();
-      const { data, error } = await client.auth.getUser();
-      if (error) {
-        $("status").textContent = `Auth check failed: ${error.message}`;
-        return null;
+      await restoreSessionFromUrl();
+      const { data } = await client.auth.getUser();
+      return data?.user || null;
+    }
+
+    async function sendLink() {
+      const email = state.signin.email.trim();
+      if (!email) { state.signin.error = "Enter your work email."; return render(); }
+      store.set("email", email);
+      state.signin.sending = true; state.signin.error = null; render();
+      const { error } = await client.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.origin + window.location.pathname } });
+      state.signin.sending = false;
+      if (error) state.signin.error = error.message; else state.signin.sent = true;
+      render();
+    }
+
+    async function signOut() {
+      if (client) await client.auth.signOut();
+      state.user = null; state.raw = null; model = null;
+      render();
+    }
+
+    // ---------------------------------------------------------------------------
+    // Data loading (paged, so no view is silently capped at PostgREST's row limit)
+    // ---------------------------------------------------------------------------
+    const PAGE = 1000;
+    async function fetchAll(view, order, filter) {
+      const rows = [];
+      for (let from = 0; ; from += PAGE) {
+        let query = client.from(view).select("*").eq("org_id", state.config.orgId);
+        if (filter) query = filter(query);
+        for (const column of order) query = query.order(column, { ascending: true });
+        const { data, error } = await query.range(from, from + PAGE - 1);
+        if (error) throw new Error(`${view}: ${error.message}`);
+        rows.push(...data);
+        if (data.length < PAGE) return rows;
       }
-      if (data?.user) {
-        $("status").textContent = `Signed in as ${data.user.email || data.user.id}`;
-        return data.user;
-      }
-      $("status").textContent = "Configured, not signed in";
-      return null;
-    }
-
-    function saveSettings() {
-      for (const id of ["supabaseUrl", "anonKey", "orgId", "email"]) {
-        localStorage.setItem(id, $(id).value.trim());
-      }
-      connect();
-    }
-
-    async function login() {
-      saveSettings();
-      if (!client) return alert("Configure Supabase first.");
-      const email = $("email").value.trim();
-      if (!email) return alert("Enter an email address.");
-      const { error } = await client.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.href } });
-      if (error) return alert(error.message);
-      $("status").textContent = "Login link sent";
-    }
-
-    function table(id, headers, rows) {
-      $(id).innerHTML = `
-        <thead><tr>${headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead>
-        <tbody>${rows.length ? rows.join("") : `<tr><td colspan="${headers.length}" class="subtle">No rows for this window.</td></tr>`}</tbody>
-      `;
-    }
-
-    function groupRows(rows, keyFn) {
-      const out = new Map();
-      for (const row of rows) {
-        const key = keyFn(row);
-        const item = out.get(key) || { key, rows: [], tokens: 0, requests: 0, cacheTokens: 0 };
-        item.rows.push(row);
-        item.tokens += Number(row.reported_total || 0);
-        item.requests += Number(row.requests || 0);
-        item.cacheTokens += Number(row.cache_tokens || 0);
-        out.set(key, item);
-      }
-      return [...out.values()].sort((a, b) => b.tokens - a.tokens);
-    }
-
-    function topBy(rows, keyFn) {
-      const grouped = groupRows(rows, keyFn);
-      return grouped[0] || null;
-    }
-
-    function personRows(projects, models, peopleMeta, activityRows = []) {
-      const grouped = groupRows(projects, keyOf);
-      const byKey = new Map(peopleMeta.map((row) => [keyOf(row), row]));
-      const modelByKey = new Map();
-      for (const group of groupRows(models, (row) => `${keyOf(row)}|${row.model_label}`)) {
-        const first = group.rows[0];
-        const key = keyOf(first);
-        const existing = modelByKey.get(key);
-        if (!existing || group.tokens > existing.tokens) modelByKey.set(key, { label: first.model_label, tokens: group.tokens });
-      }
-      return grouped.map((group) => {
-        const first = group.rows[0];
-        const meta = byKey.get(group.key) || first;
-        const topProject = topBy(group.rows, (row) => row.project_name || row.project);
-        const topModel = modelByKey.get(group.key);
-        return {
-          ...meta,
-          key: group.key,
-          person_label: meta.person_label || first.person_label,
-          machine_label: meta.machine_label || first.machine_label,
-          account_display_label: meta.account_display_label || first.account_display_label,
-          reported_total: group.tokens,
-          requests: group.requests,
-          cache_tokens: group.cacheTokens,
-          cache_share: group.tokens ? group.cacheTokens / group.tokens : 0,
-          top_project: topProject ? topProject.key : "No project",
-          top_model: topModel ? topModel.label : "Unknown model",
-          share: 0,
-        };
-      }).concat(groupRows(activityRows.filter((row) => !grouped.some((group) => group.key === keyOf(row))), keyOf).map((group) => {
-        const first = group.rows[0];
-        return {
-          ...first,
-          key: group.key,
-          reported_total: 0,
-          requests: 0,
-          cache_tokens: 0,
-          cache_share: 0,
-          top_project: "No project",
-          top_model: "Unknown model",
-          share: 0,
-        };
-      }));
-    }
-
-    function metricCards(people, projects, models, anomalies, sources, activity) {
-      const total = people.reduce((sum, row) => sum + Number(row.reported_total || 0), 0);
-      const cache = people.reduce((sum, row) => sum + Number(row.cache_tokens || 0), 0);
-      const stale = people.filter((row) => healthFor(row)[1] === "Stale").length;
-      const topPerson = people[0];
-      const topProject = topBy(projects, (row) => row.project_name || row.project);
-      const topModel = topBy(models, (row) => row.model_label);
-      const derivedActivity = activity.reduce((sum, row) => sum + Number(row.sessions || 0) + Number(row.messages || 0) + Number(row.turns || 0), 0);
-      const exactSources = sources.filter((row) => row.confidence === "exact").length;
-      const items = [
-        ["Total usage", fmt(total), $("windowDays").selectedOptions[0].textContent, "neutral"],
-        ["People", people.length, topPerson ? `${topPerson.person_label} leads` : "No usage", "neutral"],
-        ["Machines", new Set(people.map((row) => row.machine_id)).size, "Reporting collectors", "neutral"],
-        ["Claude sources", sources.length, `${exactSources} exact, ${sources.length - exactSources} derived/evidence`, sources.length ? "good" : "warn"],
-        ["Activity signals", fmt(derivedActivity), "Sessions, messages, and turns", derivedActivity ? "good" : "neutral"],
-        ["Cache share", pct(total ? cache / total : 0), total && cache / total > 0.9 ? "Very high context reuse" : "Normal context reuse", total && cache / total > 0.9 ? "warn" : "good"],
-        ["Stale collectors", stale, stale ? "No sync in 2h+" : "All recent", stale ? "bad" : "good"],
-        ["Open anomalies", anomalies.length, anomalies.length ? "Needs review" : "Clean", anomalies.length ? "warn" : "good"],
-      ];
-      $("metrics").innerHTML = items.map(([label, value, note, status]) => `
-        <div class="metric">
-          <div class="metric-label">${esc(label)}</div>
-          <div class="metric-value ${status === "bad" ? "bad" : status === "warn" ? "warn" : status === "good" ? "good" : ""}">${esc(value)}</div>
-          <div class="metric-note">${esc(note)}</div>
-        </div>
-      `).join("");
-      const nonExact = sources.some((row) => row.confidence !== "exact");
-      $("headline").textContent = topProject && topModel
-        ? `Top driver: ${topProject.key} with ${fmt(topProject.tokens)}; top model: ${topModel.key}${nonExact ? "; exact tokens + detected activity" : ""}`
-        : `Attribution, drivers, and collector health for ${$("orgId").value.trim() || DEFAULT_ORG_ID}`;
-    }
-
-    function renderPeople(people, total) {
-      exportRows.people = people.map((row) => ({
-        person: row.person_label,
-        os_user: row.os_username || "",
-        machine: row.machine_label,
-        account: row.account_display_label,
-        tokens: row.reported_total,
-        share: total ? row.reported_total / total : 0,
-        requests: row.requests,
-        top_project: row.top_project,
-        top_model: row.top_model,
-        last_sync: row.last_sync_at || "",
-        health: healthFor(row)[1],
-      }));
-      $("peopleCount").textContent = `${people.length} attributed person-machine ${people.length === 1 ? "record" : "records"}`;
-      table("people", ["Person", "Machine", "Account", "Tokens", "Share", "Requests", "Top project", "Top model", "Last sync", "Health"], people.map((row) => {
-        const [healthClass, healthLabel] = healthFor(row);
-        const selected = row.key === selectedKey ? " selected" : "";
-        return `<tr class="${selected}" data-key="${esc(row.key)}">
-          <td><div class="name">${esc(row.person_label)} <button class="ghost alias" data-type="user" data-id="${esc(row.user_id)}" data-current="${esc(row.person_label)}">Edit</button></div><div class="subtle mono" title="${esc(row.user_id)}">${esc(compactId(row.user_id))}</div></td>
-          <td><div>${esc(row.machine_label)} <button class="ghost alias" data-type="machine" data-id="${esc(row.machine_id)}" data-current="${esc(row.machine_label)}">Edit</button></div><div class="subtle">${esc(row.hostname || "")}</div></td>
-          <td>${esc(row.account_display_label)}</td>
-          <td class="name">${fmt(row.reported_total)}</td>
-          <td><div class="bar"><span style="width:${Math.min(100, Math.max(0, row.share * 100))}%"></span></div><div class="subtle">${pct(row.share)}</div></td>
-          <td>${esc(row.requests)}</td>
-          <td>${esc(row.top_project)}</td>
-          <td>${esc(row.top_model)}</td>
-          <td><span title="${esc(row.last_sync_at || "")}">${esc(timeAgo(row.last_sync_at))}</span></td>
-          <td><span class="badge ${healthClass}">${healthLabel}</span></td>
-        </tr>`;
-      }));
-      document.querySelectorAll("#people tbody tr[data-key]").forEach((tr) => {
-        tr.addEventListener("click", (event) => {
-          if (event.target.closest("button")) return;
-          selectedKey = tr.dataset.key;
-          renderCurrent();
-        });
-      });
-      document.querySelectorAll("button.alias").forEach((button) => {
-        button.addEventListener("click", (event) => {
-          event.stopPropagation();
-          openAlias(button.dataset.type, button.dataset.id, button.dataset.current);
-        });
-      });
-    }
-
-    function renderProjects(projects, total) {
-      const rows = groupRows(projects.filter((row) => sameIdentity(row, selectedKey)), (row) => `${row.person_label}|${row.machine_label}|${row.project_name || row.project}`)
-        .slice(0, 40)
-        .map((group) => {
-          const first = group.rows[0];
-          return {
-            person: first.person_label,
-            machine: first.machine_label,
-            project: first.project_name || first.project,
-            tokens: group.tokens,
-            share: total ? group.tokens / total : 0,
-            requests: group.requests,
-            cache_share: group.tokens ? group.cacheTokens / group.tokens : 0,
-          };
-        });
-      exportRows.projects = rows;
-      table("projects", ["Person", "Machine", "Project", "Tokens", "Share", "Requests", "Cache"], rows.map((row) => `
-        <tr>
-          <td>${esc(row.person)}</td>
-          <td>${esc(row.machine)}</td>
-          <td class="name">${esc(row.project)}</td>
-          <td>${fmt(row.tokens)}</td>
-          <td>${pct(row.share)}</td>
-          <td>${esc(row.requests)}</td>
-          <td>${pct(row.cache_share)}</td>
-        </tr>
-      `));
-    }
-
-    function renderModels(models, total) {
-      const rows = groupRows(models.filter((row) => sameIdentity(row, selectedKey)), (row) => `${row.person_label}|${row.machine_label}|${row.model_label}`)
-        .slice(0, 40)
-        .map((group) => {
-          const first = group.rows[0];
-          return {
-            person: first.person_label,
-            machine: first.machine_label,
-            model: first.model_label,
-            tokens: group.tokens,
-            share: total ? group.tokens / total : 0,
-            requests: group.requests,
-            cache_share: group.tokens ? group.cacheTokens / group.tokens : 0,
-          };
-        });
-      exportRows.models = rows;
-      table("models", ["Person", "Machine", "Model", "Tokens", "Share", "Requests", "Cache"], rows.map((row) => `
-        <tr>
-          <td>${esc(row.person)}</td>
-          <td>${esc(row.machine)}</td>
-          <td class="name">${esc(row.model)}</td>
-          <td>${fmt(row.tokens)}</td>
-          <td>${pct(row.share)}</td>
-          <td>${esc(row.requests)}</td>
-          <td>${pct(row.cache_share)}</td>
-        </tr>
-      `));
-    }
-
-    function renderSessions(sessions, total) {
-      const filtered = sessions.filter((row) => sameIdentity(row, selectedKey)).slice(0, 25);
-      table("sessions", ["Person", "Surface", "Project", "Session", "Tokens", "Share", "Confidence", "Rate", "Last activity"], filtered.map((row) => `
-        <tr>
-          <td>${esc(row.person_label)}<div class="subtle">${esc(row.machine_label)}</div></td>
-          <td>${esc(surfaceLabel(row.surface))}</td>
-          <td>${esc(row.project_name || row.project)}</td>
-          <td><span class="mono" title="${esc(row.session_id)}">${esc(compactId(row.session_id))}</span>${row.is_subagent ? ' <span class="badge neutral">Subagent</span>' : ""}</td>
-          <td class="name">${fmt(row.reported_total)}</td>
-          <td>${pct(total ? Number(row.reported_total || 0) / total : 0)}</td>
-          <td><span class="badge ${row.confidence === "exact" ? "good" : "neutral"}">${esc(row.confidence || "exact")}</span></td>
-          <td>${fmt(row.tokens_per_hour || 0)}/h</td>
-          <td>${esc(timeAgo(row.last_ts))}</td>
-        </tr>
-      `));
-    }
-
-    function renderSources(sources) {
-      const filtered = sources.filter((row) => sameIdentity(row, selectedKey)).filter(sameSurface);
-      $("sourceCount").textContent = `${filtered.length} discovered`;
-      exportRows.sources = filtered.map((row) => ({
-        person: row.person_label,
-        machine: row.machine_label,
-        surface: surfaceLabel(row.surface),
-        status: row.status,
-        confidence: row.confidence,
-        files: row.file_count,
-        latest_activity: row.latest_activity_at || "",
-        extractor: row.extractor,
-      }));
-      table("sources", ["Person", "Machine", "Surface", "Status", "Confidence", "Files", "Latest", "Extractor"], filtered.map((row) => `
-        <tr>
-          <td>${esc(row.person_label)}</td>
-          <td>${esc(row.machine_label)}</td>
-          <td>${esc(surfaceLabel(row.surface))}</td>
-          <td><span class="badge ${row.status === "present" ? "good" : "warn"}">${esc(row.status)}</span></td>
-          <td><span class="badge ${row.confidence === "exact" ? "good" : row.confidence === "derived" ? "warn" : "neutral"}">${esc(row.confidence)}</span></td>
-          <td>${fmt(row.file_count)}</td>
-          <td>${esc(timeAgo(row.latest_activity_at))}</td>
-          <td>${esc(row.extractor)}</td>
-        </tr>
-      `));
-    }
-
-    function renderActivity(activity) {
-      const filtered = activity.filter((row) => sameIdentity(row, selectedKey)).filter(sameSurface);
-      exportRows.activity = filtered.map((row) => ({
-        day: row.day,
-        person: row.person_label,
-        machine: row.machine_label,
-        surface: surfaceLabel(row.surface),
-        sessions: row.sessions,
-        messages: row.messages,
-        turns: row.turns,
-        tools: row.tool_calls,
-        confidence: row.confidence,
-      }));
-      table("activity", ["Day", "Person", "Surface", "Sessions", "Messages", "Turns", "Tools", "Confidence"], filtered.slice(0, 80).map((row) => `
-        <tr>
-          <td>${esc(row.day)}</td>
-          <td>${esc(row.person_label)}<div class="subtle">${esc(row.machine_label)}</div></td>
-          <td>${esc(surfaceLabel(row.surface))}</td>
-          <td>${fmt(row.sessions)}</td>
-          <td>${fmt(row.messages)}</td>
-          <td>${fmt(row.turns)}</td>
-          <td>${fmt(row.tool_calls)}</td>
-          <td><span class="badge ${row.confidence === "derived" ? "warn" : "neutral"}">${esc(row.confidence)}</span></td>
-        </tr>
-      `));
-    }
-
-    function renderAnomalies(anomalies) {
-      const filtered = anomalies.filter((row) => sameIdentity(row, selectedKey));
-      $("anomalyCount").textContent = `${filtered.length} open`;
-      table("anomalies", ["Status", "Person", "Machine", "Message", "Last seen"], filtered.map((row) => {
-        const cls = row.severity === "bad" || row.severity === "high" ? "bad" : "warn";
-        return `<tr>
-          <td><span class="badge ${cls}">${esc(row.severity || "warn")}</span></td>
-          <td>${esc(row.person_label)}</td>
-          <td>${esc(row.machine_label)}</td>
-          <td>${esc(row.message)}</td>
-          <td>${esc(timeAgo(row.last_seen_at))}</td>
-        </tr>`;
-      }));
-    }
-
-    function renderDrivers(people, projects, models, sessions) {
-      const scopedPeople = people.filter((row) => !selectedKey || row.key === selectedKey);
-      const scopedProjects = projects.filter((row) => sameIdentity(row, selectedKey));
-      const scopedModels = models.filter((row) => sameIdentity(row, selectedKey));
-      const scopedSessions = sessions.filter((row) => sameIdentity(row, selectedKey));
-      const total = scopedPeople.reduce((sum, row) => sum + Number(row.reported_total || 0), 0);
-      const topPerson = scopedPeople[0];
-      const topProject = topBy(scopedProjects, (row) => row.project_name || row.project);
-      const topModel = topBy(scopedModels, (row) => row.model_label);
-      const topSession = scopedSessions[0];
-      const items = [];
-      if (!selectedKey && topPerson) items.push(["Top person", topPerson.person_label, topPerson.reported_total, topPerson.reported_total / total]);
-      if (topProject) items.push(["Top project", topProject.key, topProject.tokens, total ? topProject.tokens / total : 0]);
-      if (topModel) items.push(["Top model", topModel.key, topModel.tokens, total ? topModel.tokens / total : 0]);
-      if (topSession) items.push(["Top session", `${topSession.project_name} / ${compactId(topSession.session_id)}`, Number(topSession.reported_total || 0), total ? Number(topSession.reported_total || 0) / total : 0]);
-      $("driverScope").textContent = selectedKey && scopedPeople[0] ? scopedPeople[0].person_label : "Team";
-      $("drivers").innerHTML = items.length ? items.map(([label, name, tokens, share]) => {
-        const cls = share > 0.7 ? "bad" : share > 0.45 ? "warn" : "neutral";
-        return `<div class="driver">
-          <span class="badge ${cls}">${esc(label)}</span>
-          <div><div class="name">${esc(name)}</div><div class="subtle">${share > 0.7 ? "Concentrated usage; worth reviewing." : share > 0.45 ? "Material usage driver." : "Normal contributor."}</div></div>
-          <div class="name">${fmt(tokens)}<div class="subtle">${pct(share)}</div></div>
-        </div>`;
-      }).join("") : `<div class="empty">No usage drivers for this window.</div>`;
-    }
-
-    function renderDetail(people) {
-      const selected = people.find((row) => row.key === selectedKey);
-      if (!selected) {
-        $("selectedScope").textContent = "Team view";
-        $("personDetail").className = "empty";
-        $("personDetail").innerHTML = "Select a person to inspect their projects, models, machine, and collector health.";
-        return;
-      }
-      const [healthClass, healthLabel] = healthFor(selected);
-      $("selectedScope").textContent = selected.person_label;
-      $("personDetail").className = "";
-      $("personDetail").innerHTML = `
-        <div class="driver-list">
-          <div><div class="name">${esc(selected.person_label)}</div><div class="subtle">OS user: ${esc(selected.os_username || "unknown")}</div></div>
-          <div><span class="badge ${healthClass}">${healthLabel}</span> <span class="badge neutral">${esc(selected.collector_version || "unknown version")}</span></div>
-          <div class="driver"><span class="subtle">Machine</span><span>${esc(selected.machine_label)}</span><span class="mono" title="${esc(selected.machine_id)}">${esc(compactId(selected.machine_id))}</span></div>
-          <div class="driver"><span class="subtle">Account</span><span>${esc(selected.account_display_label)}</span><span></span></div>
-          <div class="driver"><span class="subtle">Usage</span><span>${fmt(selected.reported_total)} tokens</span><span>${esc(selected.requests)} req</span></div>
-          <div class="driver"><span class="subtle">Cache</span><span>${pct(selected.cache_share)}</span><span>${fmt(selected.cache_tokens)}</span></div>
-          <div class="driver"><span class="subtle">Last sync</span><span>${esc(timeAgo(selected.last_sync_at))}</span><span></span></div>
-        </div>
-      `;
-    }
-
-    let currentData = { peopleMeta: [], projects: [], models: [], sessions: [], anomalies: [], sources: [], activity: [] };
-
-    function renderCurrent() {
-      const projects = currentData.projects.filter(sameSurface);
-      const models = currentData.models.filter(sameSurface);
-      const sessions = currentData.sessions.filter(sameSurface);
-      const sources = currentData.sources.filter(sameSurface);
-      const activity = currentData.activity.filter(sameSurface);
-      const people = personRows(projects, models, currentData.peopleMeta, [...sources, ...activity]);
-      const total = people.reduce((sum, row) => sum + Number(row.reported_total || 0), 0);
-      for (const row of people) row.share = total ? Number(row.reported_total || 0) / total : 0;
-      people.sort((a, b) => b.reported_total - a.reported_total);
-      metricCards(people, projects, models, currentData.anomalies, sources, activity);
-      renderPeople(people, total);
-      const scopedTotal = selectedKey
-        ? people.filter((row) => row.key === selectedKey).reduce((sum, row) => sum + Number(row.reported_total || 0), 0)
-        : total;
-      renderProjects(projects, scopedTotal);
-      renderModels(models, scopedTotal);
-      renderSessions(sessions, scopedTotal);
-      renderSources(currentData.sources);
-      renderActivity(currentData.activity);
-      renderAnomalies(currentData.anomalies);
-      renderDrivers(people, projects, models, sessions);
-      renderDetail(people);
-    }
-
-    async function fetchView(name, options = {}) {
-      let query = client.from(name).select("*").eq("org_id", $("orgId").value.trim());
-      if (options.dayColumn && cutoffDay()) query = query.gte(options.dayColumn, cutoffDay());
-      if (options.order) query = query.order(options.order, { ascending: false });
-      if (options.limit) query = query.limit(options.limit);
-      const { data, error } = await query;
-      if (error) throw error;
-      return data || [];
     }
 
     async function refresh() {
-      saveSettings();
-      if (!client) return alert("Configure Supabase first.");
-      const user = await updateAuthStatus();
-      if (!user) return alert("Sign in to Supabase first.");
-      $("status").textContent = "Loading analytics...";
+      if (window.DASHBOARD_FIXTURE) { state.raw = window.DASHBOARD_FIXTURE; state.loadedAt = new Date(); return render(); }
+      if (!client || !state.user) return;
+      const range = rangeInfo();
+      const today = startOfDay(new Date());
+      // Twice the range, so the brief can compare against the previous period; at least 7 days for work lanes.
+      const since = range.days ? dayKey(addDays(today, -(range.days * 2 - 1))) : null;
+      const sessionSince = addDays(today, -Math.max(6, range.days ? range.days - 1 : 6));
+      state.loading = true; state.error = null; render();
       try {
-        const [peopleMeta, projects, models, sessions, anomalies, sources, activity] = await Promise.all([
-          fetchView("dashboard_people_usage", { order: "reported_total", limit: 1000 }),
-          fetchView("dashboard_user_project_usage", { dayColumn: "day", order: "reported_total", limit: 10000 }),
-          fetchView("dashboard_user_model_usage", { dayColumn: "day", order: "reported_total", limit: 10000 }),
-          fetchView("dashboard_sessions", { dayColumn: "last_ts", order: "reported_total", limit: 1000 }),
-          fetchView("dashboard_anomalies", { order: "last_seen_at", limit: 500 }),
-          fetchView("dashboard_sources", { order: "latest_activity_at", limit: 5000 }),
-          fetchView("dashboard_activity_daily", { dayColumn: "day", order: "day", limit: 10000 }),
+        const identity = ["collector_id", "machine_id", "user_id", "account_label"];
+        const [people, projects, models, sessions, anomalies, sources, tools] = await Promise.all([
+          fetchAll("dashboard_people_usage", identity),
+          fetchAll("dashboard_user_project_usage", ["day", ...identity, "surface", "confidence", "project"], (q) => (since ? q.gte("day", since) : q)),
+          fetchAll("dashboard_user_model_usage", ["day", ...identity, "surface", "confidence", "model_label"], (q) => (since ? q.gte("day", since) : q)),
+          fetchAll("dashboard_sessions", [...identity, "session_id"], (q) => (range.days ? q.gte("last_ts", sessionSince.toISOString()) : q)),
+          fetchAll("dashboard_anomalies", ["collector_id", "machine_id", "user_id", "code"]),
+          fetchAll("dashboard_sources", [...identity, "source_id"]),
+          fetchAll("dashboard_person_tools", [...identity, "tool"]),
         ]);
-        currentData = { peopleMeta, projects, models, sessions, anomalies, sources, activity };
-        if (selectedKey && ![...projects, ...sources, ...activity].some((row) => keyOf(row) === selectedKey)) selectedKey = null;
-        renderCurrent();
-        $("status").textContent = `Loaded ${projects.length} project rows, ${models.length} model rows`;
+        state.raw = { people, projects, models, sessions, anomalies, sources, tools };
+        state.loadedAt = new Date();
       } catch (error) {
-        $("status").textContent = `Load failed: ${error.message}`;
-        alert(error.message);
+        state.error = error.message;
       }
+      state.loading = false;
+      render();
     }
 
-    function openAlias(entityType, entityId, current) {
-      aliasTarget = { entityType, entityId };
-      $("aliasTitle").textContent = `Edit ${entityType} alias`;
-      $("aliasMeta").textContent = entityId;
-      $("aliasName").value = current || "";
-      $("aliasDialog").showModal();
-      setTimeout(() => $("aliasName").focus(), 20);
-    }
-
-    async function saveAlias(event) {
-      event.preventDefault();
-      if (!aliasTarget || !client) return;
-      const orgId = $("orgId").value.trim();
-      const displayName = $("aliasName").value.trim();
+    async function saveAlias() {
+      const person = model?.byKey.get(state.selected);
+      if (!person || !client) return;
+      const name = state.draft.trim();
       const table = client.from("identity_aliases");
-      const result = displayName
-        ? await table.upsert({ org_id: orgId, entity_type: aliasTarget.entityType, entity_id: aliasTarget.entityId, display_name: displayName, updated_at: new Date().toISOString() })
-        : await table.delete().eq("org_id", orgId).eq("entity_type", aliasTarget.entityType).eq("entity_id", aliasTarget.entityId);
-      if (result.error) return alert(result.error.message);
-      $("aliasDialog").close();
+      const result = name && name !== person.fallbackName
+        ? await table.upsert({ org_id: state.config.orgId, entity_type: "user", entity_id: person.user_id, display_name: name, updated_at: new Date().toISOString() })
+        : await table.delete().eq("org_id", state.config.orgId).eq("entity_type", "user").eq("entity_id", person.user_id);
+      if (result.error) { state.error = `Rename failed: ${result.error.message}. Only organization admins can rename people.`; state.editing = false; return render(); }
+      state.editing = false;
       await refresh();
     }
 
-    function exportCsv(name, rows) {
-      if (!rows.length) return alert("No rows to export.");
+    // ---------------------------------------------------------------------------
+    // Model: raw view rows -> people, projects, models, reasons for the chosen range
+    // ---------------------------------------------------------------------------
+    const keyOf = (row) => [row.user_id, row.machine_id, row.collector_id, row.account_label || ""].join("|");
+    const bump = (map, key, value) => map.set(key, (map.get(key) || 0) + value);
+    const topEntry = (map) => [...map.entries()].sort((a, b) => b[1] - a[1])[0] || null;
+    const sortedEntries = (map) => [...map.entries()].sort((a, b) => b[1] - a[1]);
+
+    function deriveModel(raw) {
+      const range = rangeInfo();
+      const today = startOfDay(new Date());
+      const cutoff = range.days ? addDays(today, -(range.days - 1)) : null;
+      const cutoffKey = cutoff ? dayKey(cutoff) : null;
+      const prevKey = cutoff ? dayKey(addDays(cutoff, -range.days)) : null;
+      const inRange = (day) => !cutoffKey || day >= cutoffKey;
+      const inPrev = (day) => Boolean(prevKey) && day >= prevKey && day < cutoffKey;
+
+      const byKey = new Map();
+      const ensure = (row) => {
+        const key = keyOf(row);
+        if (!byKey.has(key)) {
+          byKey.set(key, {
+            key, user_id: row.user_id, machine_id: row.machine_id, collector_id: row.collector_id, account_label: row.account_label || "",
+            name: row.person_label || String(row.user_id).slice(0, 10), fallbackName: row.os_username || String(row.user_id).slice(0, 10),
+            machine: row.machine_label || row.hostname || String(row.machine_id).slice(0, 10), account: row.account_display_label || "",
+            meta: null, tokens: 0, prevTokens: 0, requests: 0, cache: 0,
+            projects: new Map(), models: new Map(), days: new Map(), sessions: [], allSessions: [], tools: [], anomalies: [], surfaces: new Set(),
+          });
+        }
+        return byKey.get(key);
+      };
+
+      for (const row of raw.people) { const p = ensure(row); p.meta = row; p.name = row.person_label || p.name; p.fallbackName = row.os_username || p.fallbackName; }
+      const teamProjects = new Map();
+      let firstDay = null;
+      for (const row of raw.projects) {
+        const p = ensure(row);
+        const tokens = num(row.reported_total);
+        if (!firstDay || row.day < firstDay) firstDay = row.day;
+        if (inRange(row.day)) {
+          p.tokens += tokens; p.requests += num(row.requests); p.cache += num(row.cache_tokens);
+          const projectName = row.project_name || row.project;
+          bump(p.projects, projectName, tokens);
+          bump(p.days, row.day, tokens);
+          if (!teamProjects.has(projectName)) teamProjects.set(projectName, { name: projectName, tokens: 0, cache: 0, requests: 0, people: new Map() });
+          const tp = teamProjects.get(projectName);
+          tp.tokens += tokens; tp.cache += num(row.cache_tokens); tp.requests += num(row.requests); bump(tp.people, p.key, tokens);
+        } else if (inPrev(row.day)) {
+          p.prevTokens += tokens;
+        }
+      }
+      const teamModels = new Map();
+      for (const row of raw.models) {
+        if (!inRange(row.day)) continue;
+        const p = ensure(row);
+        const tokens = num(row.reported_total);
+        bump(p.models, row.model_label, tokens);
+        if (!teamModels.has(row.model_label)) teamModels.set(row.model_label, { name: row.model_label, tokens: 0, requests: 0, web: 0 });
+        const tm = teamModels.get(row.model_label);
+        tm.tokens += tokens; tm.requests += num(row.requests); tm.web += num(row.web_search_requests);
+      }
+      const laneStart = addDays(today, -6);
+      for (const row of raw.sessions) {
+        const p = ensure(row);
+        p.allSessions.push(row);
+        if (!cutoff || new Date(row.last_ts) >= cutoff) p.sessions.push(row);
+      }
+      for (const row of raw.tools) ensure(row).tools.push({ tool: row.tool, calls: num(row.calls) });
+      for (const row of raw.anomalies) {
+        for (const p of byKey.values()) if (p.user_id === row.user_id && p.machine_id === row.machine_id && p.collector_id === row.collector_id) p.anomalies.push(row);
+      }
+      for (const row of raw.sources) if (row.status === "present") ensure(row).surfaces.add(row.surface);
+
+      const people = [...byKey.values()];
+      for (const p of people) {
+        const lastSync = p.meta?.last_sync_at ? new Date(p.meta.last_sync_at).getTime() : 0;
+        p.lastSync = p.meta?.last_sync_at || null;
+        p.version = p.meta?.collector_version || "";
+        p.platform = p.meta?.platform || {};
+        p.stale = Boolean(p.meta) && (!lastSync || Date.now() - lastSync > STALE_MS);
+        p.warn = p.anomalies.some((a) => a.severity === "warn" || a.severity === "bad");
+        p.status = p.stale ? { label: "Stale", color: "var(--bad)" } : p.warn ? { label: "Check setup", color: "var(--warn)" } : { label: "Healthy", color: "var(--good)" };
+      }
+
+      const total = people.reduce((acc, p) => acc + p.tokens, 0);
+      const prevTotal = people.reduce((acc, p) => acc + p.prevTokens, 0);
+      const cacheTotal = people.reduce((acc, p) => acc + p.cache, 0);
+      const ranked = people.filter((p) => p.tokens > 0).sort((a, b) => b.tokens - a.tokens);
+      for (const p of people) {
+        p.share = total ? p.tokens / total : 0;
+        p.reasons = reasonsFor(p);
+        p.topProject = topEntry(p.projects)?.[0] || "";
+        p.topModel = topEntry(p.models)?.[0] || "";
+      }
+      const projects = [...teamProjects.values()].sort((a, b) => b.tokens - a.tokens);
+      const models = [...teamModels.values()].sort((a, b) => b.tokens - a.tokens);
+      const issues = buildIssues(people);
+      return { range, today, cutoff, laneStart, people, byKey, ranked, total, prevTotal, cacheShare: total ? cacheTotal / total : 0, firstDay, projects, models, issues };
+    }
+
+    function reasonsFor(p) {
+      const reasons = [];
+      const sessions = p.sessions.filter((s) => num(s.reported_total) > 0);
+      const sessionTokens = sessions.reduce((acc, s) => acc + num(s.reported_total), 0);
+      const biggest = sessions.slice().sort((a, b) => num(b.reported_total) - num(a.reported_total))[0];
+      if (biggest && p.tokens && num(biggest.reported_total) / p.tokens >= 0.25) {
+        reasons.push({ kind: "single", project: biggest.project_name, text: `One ${duration(biggest.duration_seconds)} session is ${pct(Math.min(1, num(biggest.reported_total) / p.tokens))} of the total` });
+      }
+      const long = sessions.filter((s) => num(s.duration_seconds) >= 7200);
+      if (long.length >= 2) reasons.push({ kind: "long", count: long.length, text: `${countWord(long.length)} sessions ran longer than 2 hours` });
+      const subTokens = sessions.filter((s) => s.is_subagent).reduce((acc, s) => acc + num(s.reported_total), 0);
+      const subRuns = sessions.filter((s) => s.is_subagent).length;
+      if (sessionTokens && subTokens / sessionTokens >= 0.15) reasons.push({ kind: "subagents", text: `${countWord(subRuns)} subagent runs are ${pct(subTokens / sessionTokens)} of tokens` });
+      const cacheShare = p.tokens ? p.cache / p.tokens : 0;
+      if (cacheShare >= 0.9) reasons.push({ kind: "cache", text: `${pct(cacheShare)} of tokens are context being reread` });
+      const topModel = topEntry(p.models);
+      if (topModel && p.tokens && topModel[1] / p.tokens >= 0.75 && topModel[0] !== "Unknown model") {
+        reasons.push({ kind: "model", model: topModel[0], text: `${modelName(topModel[0])} for ${pct(topModel[1] / p.tokens)} of the work` });
+      }
+      const toolTotal = p.tools.reduce((acc, t) => acc + t.calls, 0);
+      const topTool = p.tools.slice().sort((a, b) => b.calls - a.calls)[0];
+      if (topTool && toolTotal >= 20 && topTool.calls / toolTotal >= 0.4) {
+        const share = pct(topTool.calls / toolTotal);
+        const phrase = { Bash: `Command-heavy: ${share} of tool calls run commands`, Read: `Reads many files: ${share} of tool calls are Read`, Edit: `Mostly editing: ${share} of tool calls are Edit` }[topTool.tool];
+        reasons.push({ kind: "tool", text: phrase || `${share} of tool calls are ${topTool.tool}` });
+      }
+      const avg = sessions.length ? sessions.reduce((acc, s) => acc + num(s.duration_seconds), 0) / sessions.length : 0;
+      if (sessions.length >= 3 && avg < 1200 && !reasons.length) reasons.push({ kind: "short", text: "Short sessions, no single large run" });
+      if (!reasons.length) reasons.push({ kind: "spread", text: sessions.length ? `Spread across ${sessions.length} session${sessions.length === 1 ? "" : "s"}` : "No session detail for this range" });
+      return reasons;
+    }
+
+    function buildIssues(people) {
+      const issues = [];
+      for (const p of people) {
+        if (p.stale) issues.push({ tone: "bad", person: p, title: `${p.name}’s collector is stale`, detail: `No sync from ${p.machine} since ${timeAgo(p.lastSync)}. Usage after that isn’t counted yet.`, seen: timeAgo(p.lastSync) });
+      }
+      const seen = new Set();
+      for (const p of people) {
+        for (const a of p.anomalies) {
+          const id = `${a.collector_id}|${a.code}`;
+          if (seen.has(id) || a.severity === "info") continue;
+          seen.add(id);
+          issues.push({ tone: a.severity === "bad" ? "bad" : "warn", person: p, title: `${a.code.charAt(0).toUpperCase()}${a.code.slice(1).replaceAll("_", " ")} on ${p.machine}`, detail: a.message, seen: timeAgo(a.last_seen_at) });
+        }
+      }
+      return issues;
+    }
+
+    function headlinePhrase(p) {
+      const project = p.topProject;
+      const on = project ? ` on ${project}` : "";
+      const lead = p.reasons[0];
+      switch (lead.kind) {
+        case "single": return `through one long session${lead.project ? ` on ${lead.project}` : on}`;
+        case "long": return `through ${lowerFirst(countWord(lead.count))} sessions longer than 2 hours${on}`;
+        case "subagents": return `by handing work to subagents${on}`;
+        case "model": return `with ${modelName(lead.model)}${on}`;
+        default: return project ? `working on ${project}` : "across several sessions";
+      }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Rendering: shell
+    // ---------------------------------------------------------------------------
+    function render() {
+      const app = document.getElementById("app");
+      const focus = document.activeElement?.dataset?.focus;
+      const caret = document.activeElement?.selectionStart;
+      if (!state.authChecked) { app.innerHTML = ""; return; }
+      if (!state.user) { app.innerHTML = renderSignin(); return restoreFocus(focus, caret); }
+      model = state.raw ? deriveModel(state.raw) : null;
+      app.innerHTML = renderApp();
+      if (state.tab === "share") layoutField();
+      restoreFocus(focus, caret);
+    }
+
+    function restoreFocus(focus, caret) {
+      if (!focus) return;
+      const el = document.querySelector(`[data-focus="${focus}"]`);
+      if (!el) return;
+      el.focus();
+      if (typeof caret === "number" && el.setSelectionRange) el.setSelectionRange(caret, caret);
+    }
+
+    function renderSignin() {
+      const s = state.signin;
+      const host = (() => { try { return new URL(state.config.supabaseUrl).host; } catch { return state.config.supabaseUrl || "not set"; } })();
+      return `
+        <div class="signin">
+          <header>${brandMark()}<strong style="font-size:14px;font-weight:600;letter-spacing:-0.01em;">Claude Usage</strong></header>
+          <main>
+            <div class="signin-card">
+              <div style="display:flex;flex-direction:column;gap:8px;">
+                <h1>${s.sent ? "Check your inbox" : `Sign in to ${esc(state.config.orgId)}`}</h1>
+                <p class="muted" style="margin:0;font-size:14px;line-height:1.5;color:var(--ink-3);">${s.sent ? `We sent a sign-in link to ${esc(s.email)}. Open it on this device.` : "We’ll email you a one-time link. Only members of this organization can see usage."}</p>
+              </div>
+              ${s.sent ? `<button class="btn" data-action="signin-reset">Use a different email</button>` : `
+                <form data-action="send-link" style="display:flex;flex-direction:column;gap:12px;">
+                  <label>Work email<input class="input" type="email" autocomplete="email" data-focus="email" data-input="signin-email" value="${esc(s.email)}" placeholder="you@company.com"></label>
+                  <button class="btn primary" type="submit" ${s.sending ? "disabled" : ""}>${s.sending ? "Sending…" : "Email me a sign-in link"}</button>
+                  ${s.error ? `<div class="notice error" style="margin:0;">${esc(s.error)}</div>` : ""}
+                </form>`}
+              <div style="border-top:1px solid var(--line);padding-top:16px;display:flex;flex-direction:column;gap:10px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;">
+                  <span style="color:var(--ink-3);">Connected to</span>
+                  <button class="link-btn" style="font-size:13px;" data-action="toggle-connection">${s.showConnection ? "Done" : "Change"}</button>
+                </div>
+                ${s.showConnection ? `
+                  <label style="font-size:12px;">Supabase URL<input class="input" data-input="config-supabaseUrl" data-focus="cfg-url" value="${esc(state.config.supabaseUrl)}"></label>
+                  <label style="font-size:12px;">Publishable key<input class="input" data-input="config-supabaseKey" data-focus="cfg-key" value="${esc(state.config.supabaseKey)}"></label>
+                  <label style="font-size:12px;">Organization<input class="input" data-input="config-orgId" data-focus="cfg-org" value="${esc(state.config.orgId)}"></label>` : `
+                  <div style="display:flex;flex-direction:column;gap:2px;">
+                    <span class="mono" style="font-size:12px;">${esc(host)}</span>
+                    <span class="muted" style="font-size:12px;">Organization ${esc(state.config.orgId)}</span>
+                  </div>`}
+              </div>
+            </div>
+          </main>
+        </div>`;
+    }
+
+    const brandMark = () => `<div class="brand-mark"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2 9.5V6M6 9.5V2.5M10 9.5V4.5" stroke="#f6f5f1" stroke-width="1.6" stroke-linecap="round"></path></svg></div>`;
+
+    function renderApp() {
+      const tab = TABS.find((t) => t.id === state.tab) || TABS[1];
+      const issueCount = model ? model.issues.length : 0;
+      const email = state.user.email || "Signed in";
+      const nav = TABS.map((t) => t.group
+        ? `<div class="nav-group">${t.group}</div>`
+        : `<button class="nav-item" data-action="tab" data-id="${t.id}" ${t.id === state.tab ? 'aria-current="page"' : ""}>${icon(ICONS[t.id])}<span>${t.label}</span>${t.id === "collectors" && issueCount ? `<span class="badge">${issueCount}</span>` : ""}</button>`).join("");
+      const ranges = RANGES.map((r) => `<button data-action="range" data-id="${r.id}" aria-pressed="${r.id === state.range}">${r.label}</button>`).join("");
+      return `
+        <div class="app">
+          <aside class="sidebar">
+            <div class="brand">${brandMark()}<div class="brand-name"><strong>Claude Usage</strong><span>${esc(state.config.orgId)}</span></div></div>
+            <nav class="nav">${nav}</nav>
+            <div class="sidebar-foot">
+              <div class="avatar">${esc(initials(email))}</div>
+              <div class="who"><span class="ellipsis">${esc(email)}</span><button class="link-btn" data-action="sign-out">Sign out</button></div>
+            </div>
+          </aside>
+          <section class="main">
+            <header class="topbar">
+              <div class="title"><h1>${tab.label}</h1><span class="muted ellipsis" style="font-size:13px;">${tab.subtitle}</span></div>
+              <div class="tools">
+                <div class="seg" role="group" aria-label="Date range">${ranges}</div>
+                <span class="divider"></span>
+                <span class="muted updated" style="font-size:12px;">${state.loading ? "Loading…" : state.loadedAt ? `Updated ${timeAgo(state.loadedAt)}` : ""}</span>
+                <button class="btn icon" data-action="refresh" title="Refresh" aria-label="Refresh"><span class="${state.loading ? "spin" : ""}" style="display:grid;">${icon("M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3", 15)}</span></button>
+                <button class="btn" data-action="export" aria-label="Export CSV">${icon("M8 2.5v8M4.5 7 8 10.5 11.5 7M2.5 13.5h11", 14)}<span class="btn-label">Export CSV</span></button>
+              </div>
+            </header>
+            <div class="content">
+              ${state.error ? `<div class="notice error">${esc(state.error)}</div>` : ""}
+              ${renderTab()}
+            </div>
+          </section>
+        </div>
+        ${renderDrawer()}`;
+    }
+
+    function renderTab() {
+      if (!model) return state.loading ? `<div class="empty">Loading usage…</div>` : `<div class="empty">No data loaded yet.</div>`;
+      if (!model.people.length) return `<div class="empty">No usage is visible for ${esc(state.config.orgId)}. If you expected data, ask an admin to add your account to the organization.</div>`;
+      const views = { brief: renderBrief, share: renderShare, lanes: renderLanes, people: renderPeople, projects: renderProjects, sessions: renderSessions, collectors: renderCollectors };
+      return `<div class="view">${(views[state.tab] || renderBrief)()}</div>`;
+    }
+
+    const personAction = (p) => `data-action="open-person" data-key="${esc(p.key)}"`;
+    const statusBadge = (p) => `<span class="status"><span class="dot" style="background:${p.status.color}"></span>${p.status.label}</span>`;
+
+    // ---------------------------------------------------------------------------
+    // Rendering: Brief
+    // ---------------------------------------------------------------------------
+    function renderBrief() {
+      const { ranked, range } = model;
+      if (!ranked.length) return `<div class="empty">No Claude usage was recorded ${range.days ? `in the last ${range.days} days` : "yet"}.</div>`;
+      const top = ranked[0];
+      const only = ranked.length === 1;
+      const change = model.prevTotal ? (model.total - model.prevTotal) / model.prevTotal : null;
+      const deltaText = !range.days
+        ? (model.firstDay ? `since ${new Date(model.firstDay + "T00:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}` : "")
+        : change === null ? `with no usage in the ${range.days} days before` : `${change >= 0 ? "up" : "down"} ${pct(Math.abs(change))} on the previous ${range.days} days`;
+      const peopleWord = `${ranked.length} ${ranked.length === 1 ? "person" : "people"}`;
+      const dek = `The team used ${compact(model.total)} tokens across ${peopleWord}${deltaText ? `, ${deltaText}` : ""}. ${model.cacheShare >= 0.5 ? `${pct(model.cacheShare)} of those tokens were context being reread rather than new work, so the heaviest users are usually the ones keeping long sessions open.` : ""}`;
+      const headlineRest = only ? `accounted for all of the team’s Claude usage, ${headlinePhrase(top)}.` : `drove ${pct(top.share)} of the team’s Claude usage, mostly ${headlinePhrase(top)}.`;
+
+      const ranking = ranked.slice(0, 8).map((p, i) => `
+        <button class="rank-row ${i >= 5 ? "minor" : ""}" ${personAction(p)}>
+          <span class="mono muted" style="font-size:12px;">${i + 1}</span>
+          <span class="stack"><span class="name ellipsis" style="font-size:14px;">${esc(p.name)}</span><span class="rule" style="width:${(p.tokens / top.tokens) * 100}%"></span></span>
+          <span class="mono" style="text-align:right;font-size:13px;">${pct1(p.share)}</span>
+        </button>`).join("");
+
+      const stale = ranked.find((p) => p.stale) || model.people.find((p) => p.stale);
+      const storyPeople = [ranked[1], ranked[2]].filter(Boolean);
+      if (stale && !storyPeople.includes(stale)) storyPeople.push(stale); else if (ranked[3]) storyPeople.push(ranked[3]);
+      const stories = storyPeople.slice(0, 3).map((p) => renderStory(p, p === stale && p.stale)).join("");
+      const rest = ranked.filter((p) => p !== top && !storyPeople.includes(p)).slice(0, 4);
+      const also = rest.length ? "Also: " + rest.map((p) => `${esc(p.name)}: ${esc(lowerFirst(p.reasons[0].text))}`).join(" · ") : "";
+
+      return `
+        <section class="brief-hero">
+          <div>
+            <span class="kicker">${range.kicker}</span>
+            <h2><button ${personAction(top)}>${esc(top.name)}</button> ${esc(headlineRest)}</h2>
+            <p class="dek">${esc(dek)}</p>
+          </div>
+          <aside class="ranking"><span class="kicker" style="margin-bottom:10px;">The ranking</span>${ranking}</aside>
+        </section>
+        ${stories ? `<section class="stories">${stories}</section>` : ""}
+        <footer class="brief-foot"><span>${also}</span><button class="link-btn" style="font-size:13px;color:var(--ink);text-decoration:underline;" data-action="tab" data-id="share">See it as shares</button></footer>`;
+    }
+
+    function renderStory(p, attention) {
+      const rank = model.ranked.indexOf(p) + 1;
+      if (attention) {
+        return `
+          <article class="story" role="button" tabindex="0" ${personAction(p)}>
+            <span class="kicker alert" style="letter-spacing:0;text-transform:none;font-size:12px;">${rank ? `No. ${rank} · ` : ""}Numbers may be behind</span>
+            <h3>${esc(p.name)}’s latest usage isn’t counted yet</h3>
+            <p>${esc(`The collector on ${p.machine} last synced ${timeAgo(p.lastSync)}. Anything ${firstName(p.name)} did after that will appear on the next sync${p.tokens ? `, so the real share is likely above ${pct1(p.share)}` : ""}.`)}</p>
+          </article>`;
+      }
+      const [lead, ...others] = p.reasons;
+      const projects = sortedEntries(p.projects).slice(0, 2).map(([name, tokens]) => `${name} (${pct(tokens / p.tokens)})`).join(" and ");
+      const tools = p.tools.slice().sort((a, b) => b.calls - a.calls).slice(0, 3).map((t) => t.tool).join(", ");
+      const body = [projects && `Working on ${projects}.`, ...others.map((r) => `${r.text}.`), tools && `Most-used tools: ${tools}.`].filter(Boolean).join(" ");
+      const days = [];
+      for (let i = 13; i >= 0; i--) days.push(p.days.get(dayKey(addDays(model.today, -i))) || 0);
+      const peak = Math.max(...days);
+      const spark = peak ? `<div class="spark" aria-hidden="true">${days.map((v) => `<div class="${v === peak ? "peak" : ""}" style="height:${Math.max(4, (v / peak) * 100)}%"></div>`).join("")}</div><span class="muted" style="font-size:12px;">Daily tokens, last 14 days</span>` : "";
+      return `
+        <article class="story" role="button" tabindex="0" ${personAction(p)}>
+          <span class="kicker" style="letter-spacing:0;text-transform:none;font-size:12px;">No. ${rank} · ${pct1(p.share)} · ${compact(p.tokens)} tokens</span>
+          <h3>${esc(p.name)}: ${esc(lowerFirst(lead.text))}</h3>
+          <p>${esc(body)}</p>
+          ${spark}
+        </article>`;
+    }
+
+    // ---------------------------------------------------------------------------
+    // Rendering: Share (treemap laid out after the container is measured)
+    // ---------------------------------------------------------------------------
+    function renderShare() {
+      const lenses = [["people", "People"], ["projects", "Projects"], ["models", "Models"]].map(([id, label]) => `<button data-action="lens" data-id="${id}" aria-pressed="${state.lens === id}">${label}</button>`).join("");
+      const noun = { people: "person", projects: "project", models: "model" }[state.lens];
+      return `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:14px;flex-wrap:wrap;">
+          <div class="seg" role="group" aria-label="Group by">${lenses}</div>
+          <span class="muted" style="font-size:12px;">Area is tokens by ${noun} · ${model.range.kicker.toLowerCase()}${state.lens === "people" ? " · click a block for details" : ""}</span>
+        </div>
+        <div class="field" id="field"></div>`;
+    }
+
+    function shareItems() {
+      if (state.lens === "projects") {
+        return model.projects.filter((p) => p.tokens > 0).map((p) => ({
+          value: p.tokens, title: p.name, meta: `${p.people.size} ${p.people.size === 1 ? "person" : "people"} · ${compact(p.tokens)}`, mono: true,
+          lines: [sortedEntries(p.people).slice(0, 3).map(([key, tokens]) => `${model.byKey.get(key)?.name || "Unknown"} ${pct(tokens / p.tokens)}`).join(" · "), `${pct(p.tokens ? p.cache / p.tokens : 0)} context reuse`],
+        }));
+      }
+      if (state.lens === "models") {
+        return model.models.filter((m) => m.tokens > 0).map((m) => {
+          const mainFor = model.ranked.filter((p) => p.topModel === m.name).length;
+          return { value: m.tokens, title: m.name, meta: compact(m.tokens), mono: true, lines: [mainFor ? `Main model for ${mainFor} ${mainFor === 1 ? "person" : "people"}` : `${int(m.requests)} requests`, m.web ? `${int(m.web)} web searches` : ""].filter(Boolean) };
+        });
+      }
+      return model.ranked.map((p) => ({
+        value: p.tokens, title: p.name, meta: `${p.machine} · ${compact(p.tokens)}`, person: p,
+        lines: p.reasons.map((r) => r.text), strip: sortedEntries(p.projects).map(([name, tokens]) => [name, tokens / p.tokens]),
+        flag: p.stale ? `Collector last synced ${timeAgo(p.lastSync)}` : null,
+      }));
+    }
+
+    function squarify(values, width, height) {
+      const out = [];
+      const scale = (width * height) / values.reduce((a, b) => a + b, 0);
+      let x = 0; let y = 0; let w = width; let h = height;
+      const rest = values.map((v, i) => ({ area: v * scale, i }));
+      let row = [];
+      const worst = (items, side) => {
+        const sum = items.reduce((acc, r) => acc + r.area, 0);
+        const max = Math.max(...items.map((r) => r.area));
+        const min = Math.min(...items.map((r) => r.area));
+        return Math.max((side * side * max) / (sum * sum), (sum * sum) / (side * side * min));
+      };
+      const place = () => {
+        const sum = row.reduce((acc, r) => acc + r.area, 0);
+        if (w >= h) {
+          const cw = sum / h; let cy = y;
+          for (const r of row) { const rh = r.area / cw; out[r.i] = { x, y: cy, w: cw, h: rh }; cy += rh; }
+          x += cw; w -= cw;
+        } else {
+          const rh = sum / w; let cx = x;
+          for (const r of row) { const rw = r.area / rh; out[r.i] = { x: cx, y, w: rw, h: rh }; cx += rw; }
+          y += rh; h -= rh;
+        }
+        row = [];
+      };
+      while (rest.length) {
+        const side = Math.min(w, h);
+        if (!row.length || worst([...row, rest[0]], side) <= worst(row, side)) row.push(rest.shift());
+        else place();
+      }
+      if (row.length) place();
+      return out;
+    }
+
+    function layoutField() {
+      const field = document.getElementById("field");
+      if (!field || !model) return;
+      const items = shareItems();
+      if (!items.length) { field.innerHTML = `<div class="empty">No usage in this range.</div>`; return; }
+      const width = field.clientWidth;
+      const height = field.clientHeight;
+      const totalValue = items.reduce((acc, it) => acc + it.value, 0);
+      const rects = squarify(items.map((it) => it.value), width, height);
+      field.innerHTML = items.map((it, i) => {
+        const r = rects[i];
+        const w = r.w - 4; const h = r.h - 4;
+        const dark = i < 4;
+        const tiny = w < 90 || h < 60;
+        const size = Math.sqrt(Math.max(1, w * h));
+        const big = Math.round(Math.max(28, Math.min(112, size / 4.2)));
+        const lineCount = h > 330 && w > 420 ? 3 : h > 240 ? 2 : 1;
+        const ink = dark ? { title: "#f3f1ea", meta: "#b3afa4", line: "#dcd8cd", strip: "rgba(255,255,255,0.08)" } : { title: "#1d1c19", meta: "#4d4b46", line: "#34322e", strip: "rgba(29,28,25,0.06)" };
+        const titlePx = Math.round(Math.min(24, 15 + size / 70));
+        const hasStrip = !tiny && it.strip && h > 220 && w > 260;
+        const lines = tiny || h < 190 ? [] : it.lines.slice(0, w < 220 ? 1 : lineCount);
+        const attrs = it.person ? `role="button" tabindex="0" ${personAction(it.person)}` : "";
+        const titleText = `${it.title}: ${pct(it.value / totalValue)}`;
+        return `
+          <div class="tile" ${attrs} title="${esc(titleText)}" style="left:${(r.x + 2).toFixed(1)}px;top:${(r.y + 2).toFixed(1)}px;width:${w.toFixed(1)}px;height:${h.toFixed(1)}px;background:${INK_SCALE[Math.min(i, INK_SCALE.length - 1)]};color:${ink.title};${it.person ? "cursor:pointer;" : ""}">
+            ${tiny ? "" : `
+            <div class="tile-body" style="padding:${w > 400 ? "20px 24px 16px" : "16px 16px 14px"};">
+              <div class="tile-head">
+                <div class="stack">
+                  <span class="ellipsis" style="font-size:${titlePx}px;font-weight:500;letter-spacing:-0.01em;${it.mono ? "font-family:var(--mono);" : ""}">${esc(it.title)}</span>
+                  <span class="mono ellipsis" style="font-size:12px;color:${ink.meta};">${esc(w < 300 ? it.meta.split(" · ").pop() : it.meta)}</span>
+                </div>
+                <span style="font-size:${big}px;line-height:0.8;letter-spacing:-0.05em;">${Math.round((it.value / totalValue) * 100)}<span style="font-size:${Math.round(big * 0.42)}px;letter-spacing:0;">%</span></span>
+              </div>
+              <div class="tile-lines">
+                ${it.flag ? `<span class="flag"><span class="dot" style="background:#d2512a;width:6px;height:6px;"></span>${esc(it.flag)}</span>` : ""}
+                ${lines.map((text) => `<span style="font-size:${w > 400 ? 15 : 13}px;line-height:1.35;color:${ink.line};text-wrap:pretty;">${esc(text)}</span>`).join("")}
+              </div>
+            </div>
+            ${hasStrip ? `<div class="tile-strip">${it.strip.map(([name, part]) => `<div style="flex:${part} 1 0;background:${ink.strip};color:${ink.line};">${esc(part * w > 150 ? `${name} ${pct(part)}` : part * w > 70 ? name : "")}</div>`).join("")}</div>` : ""}`}
+          </div>`;
+      }).join("");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Rendering: Work lanes (always the last 7 days, 7am to 11pm local time)
+    // ---------------------------------------------------------------------------
+    function renderLanes() {
+      const OPEN = 7; const HOURS = 16;
+      const start = model.laneStart;
+      const pos = (date) => {
+        const dayIndex = Math.round((startOfDay(date) - start) / DAY_MS); // local midnights are 23 or 25h apart across DST
+        const hour = Math.min(OPEN + HOURS, Math.max(OPEN, date.getHours() + date.getMinutes() / 60));
+        return ((dayIndex + (hour - OPEN) / HOURS) / 7) * 100;
+      };
+      const lanesPeople = model.people
+        .map((p) => ({ p, sessions: p.allSessions.filter((s) => new Date(s.first_ts || s.last_ts) >= start && num(s.reported_total) > 0) }))
+        .filter((x) => x.sessions.length)
+        .map((x) => ({ ...x, tokens: x.sessions.reduce((acc, s) => acc + num(s.reported_total), 0) }))
+        .sort((a, b) => b.tokens - a.tokens);
+      if (!lanesPeople.length) return `<div class="lanes"><div class="empty" style="color:#8f8c84;">No sessions in the last 7 days.</div></div>`;
+      const weekTotal = lanesPeople.reduce((acc, x) => acc + x.tokens, 0);
+      const allSessions = lanesPeople.flatMap((x) => x.sessions);
+      const maxTokens = Math.max(...allSessions.map((s) => num(s.reported_total)));
+      const heavy = Math.max(150000, maxTokens * 0.5);
+      // Label the biggest sessions, at most one per lane so labels never collide.
+      const callouts = new Set();
+      const labelledLanes = new Set();
+      for (const { p, sessions } of lanesPeople.flatMap((x) => x.sessions.map((s) => ({ p: x.p, sessions: s }))).sort((a, b) => num(b.sessions.reported_total) - num(a.sessions.reported_total))) {
+        if (callouts.size >= 3) break;
+        if (labelledLanes.has(p.key) || sessions.is_subagent) continue;
+        labelledLanes.add(p.key);
+        callouts.add(sessions.session_id);
+      }
+      const nowX = pos(new Date());
+
+      const days = [];
+      for (let i = 0; i < 7; i++) days.push(addDays(start, i));
+      const axis = days.map((d, i) => `<span class="mono" style="position:absolute;left:${(i / 7) * 100}%;padding-left:8px;font-size:11px;color:#8f8c84;">${d.toLocaleDateString("en-US", { weekday: "short" })} ${d.getDate()}</span>`).join("");
+      const bands = days.map((d, i) => `<div style="position:absolute;left:${(i / 7) * 100}%;width:${100 / 7}%;top:0;bottom:0;border-left:1px solid #22211f;${d.getDay() === 0 || d.getDay() === 6 ? "background:#181817;" : ""}"></div>`).join("");
+
+      const lanes = lanesPeople.map(({ p, sessions, tokens }, i) => {
+        const bars = sessions.map((s) => {
+          const first = new Date(s.first_ts || s.last_ts);
+          const left = pos(first);
+          const width = Math.max(0.35, Math.min(100 - left, (num(s.duration_seconds) / 3600 / HOURS / 7) * 100));
+          const t = num(s.reported_total);
+          const height = Math.round(4 + 30 * Math.sqrt(t / maxTokens));
+          const top = s.is_subagent ? 60 : 96 / 2 - height / 2 + 4;
+          const label = `${s.project_name || s.project} · ${duration(s.duration_seconds)} · ${compact(t)} tokens${s.is_subagent ? " · subagent" : ""}`;
+          const bar = `<div class="session-bar ${s.is_subagent ? "sub" : t >= heavy ? "heavy" : ""}" title="${esc(label)}" style="left:${left.toFixed(2)}%;width:${width.toFixed(2)}%;top:${top.toFixed(1)}px;${s.is_subagent ? "" : `height:${height}px;`}"></div>`;
+          if (!callouts.has(s.session_id) || s.is_subagent) return bar;
+          return bar + `<div class="callout-line" style="left:${left.toFixed(2)}%;height:${Math.max(4, top - 8).toFixed(1)}px;"></div><span class="callout" style="left:${left.toFixed(2)}%;${left < 50 ? "transform:translateX(6px);" : ""}">${esc(`${duration(s.duration_seconds)} · ${compact(t)} · ${s.project_name || s.project}`)}</span>`;
+        }).join("");
+        const syncedAt = p.lastSync ? new Date(p.lastSync) : null;
+        const staleBand = p.stale && syncedAt && syncedAt >= start
+          ? `<div class="stale-band" style="left:${pos(syncedAt).toFixed(2)}%;width:${Math.max(0.3, nowX - pos(syncedAt)).toFixed(2)}%;"></div><span class="stale-label" style="left:${pos(syncedAt).toFixed(2)}%;${pos(syncedAt) < 50 ? "transform:translateX(6px);" : ""}">not synced since ${esc(timeAgo(p.lastSync))}</span>`
+          : "";
+        return `
+          <div class="lane">
+            <button class="lane-name" ${personAction(p)}>
+              <span style="display:flex;align-items:baseline;gap:10px;">
+                <span class="mono" style="font-size:12px;color:#6f6c65;width:14px;">${i + 1}</span>
+                <span class="ellipsis" style="font-size:15px;font-weight:500;flex-grow:1;">${esc(p.name)}</span>
+                <span class="mono" style="font-size:12px;color:#b9b6ad;">${pct(tokens / weekTotal)}</span>
+              </span>
+              <span style="padding-left:24px;font-size:12px;line-height:1.4;color:#8f8c84;">${esc(p.reasons[0].text)}</span>
+            </button>
+            <div class="lane-sessions">${bars}${staleBand}</div>
+          </div>`;
+      }).join("");
+
+      return `
+        <div class="lanes">
+          <div class="lanes-head">
+            <span>${state.range === "7" ? "" : "Work lanes always show the last 7 days. "}Each bar is one session between 7am and 11pm: length is time spent, height is tokens. Hover a bar for details.</span>
+            <div class="legend">
+              <span><span class="swatch" style="background:#5e5b55"></span>Session</span>
+              <span><span class="swatch" style="background:#3987e5"></span>Over ${compact(heavy)} tokens</span>
+              <span><span class="swatch" style="box-shadow:inset 0 0 0 1.5px #8f8c84"></span>Subagent</span>
+            </div>
+          </div>
+          <div class="lane-axis"><span class="kicker" style="color:#6f6c65;">Ranked by tokens</span><div class="lane-track">${axis}<span class="mono" style="position:absolute;left:${nowX}%;top:-2px;font-size:11px;color:#b9b6ad;transform:translateX(6px);">now</span></div></div>
+          <div class="lane-body">
+            <div class="lane-bands">${bands}<div style="position:absolute;left:${nowX}%;top:-34px;bottom:0;width:1px;background:#ecebe6;opacity:0.45;"></div></div>
+            ${lanes}
+          </div>
+        </div>`;
+    }
+
+    // ---------------------------------------------------------------------------
+    // Rendering: data pages
+    // ---------------------------------------------------------------------------
+    const PEOPLE_COLS = "minmax(0,2.2fr) minmax(0,2.4fr) minmax(0,1fr) minmax(0,1.6fr) minmax(0,1.2fr) minmax(0,1.1fr) minmax(0,1fr)";
+    function peopleRows() {
+      const q = state.query.trim().toLowerCase();
+      return model.people
+        .filter((p) => p.meta || p.tokens)
+        .filter((p) => !q || p.name.toLowerCase().includes(q) || p.machine.toLowerCase().includes(q))
+        .sort((a, b) => b.tokens - a.tokens);
+    }
+
+    function renderPeople() {
+      const rows = peopleRows();
+      const max = Math.max(1, ...rows.map((p) => p.tokens));
+      return `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:16px;">
+          <div style="position:relative;width:min(280px,100%);">
+            <span style="position:absolute;left:10px;top:9px;color:var(--muted);">${icon("M7 11.5a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9zM10.5 10.5l3 3", 14)}</span>
+            <input class="input" style="padding-left:32px;" placeholder="Search people or machines" data-input="query" data-focus="query" value="${esc(state.query)}">
+          </div>
+          <span class="muted" style="font-size:12px;">${rows.length} ${rows.length === 1 ? "person" : "people"}</span>
+        </div>
+        <div class="panel table">
+          <div class="trow head" style="grid-template-columns:${PEOPLE_COLS}"><span>Person</span><span>Tokens</span><span class="num">Requests</span><span>Top project</span><span>Top model</span><span>Last sync</span><span>Status</span></div>
+          ${rows.map((p) => `
+            <div class="trow clickable" style="grid-template-columns:${PEOPLE_COLS}" ${personAction(p)}>
+              <span class="person-cell"><span class="avatar">${esc(initials(p.name))}</span><span class="stack"><span class="ellipsis" style="font-size:13px;font-weight:500;">${esc(p.name)}</span><span class="mono sub ellipsis">${esc(p.machine)}</span></span></span>
+              <span class="tokens-cell"><span class="mono">${compact(p.tokens)}</span><span class="bar"><div style="width:${(p.tokens / max) * 100}%"></div></span><span class="mono">${pct(p.share)}</span></span>
+              <span class="mono num" style="font-size:13px;color:var(--ink-3);">${int(p.requests)}</span>
+              <span class="mono ellipsis" style="font-size:12px;">${esc(p.topProject || "—")}</span>
+              <span class="mono ellipsis" style="font-size:12px;color:var(--ink-3);">${esc(p.topModel || "—")}</span>
+              <span style="font-size:13px;color:var(--ink-3);">${esc(timeAgo(p.lastSync))}</span>
+              ${p.meta ? statusBadge(p) : `<span class="muted" style="font-size:12px;">Activity only</span>`}
+            </div>`).join("") || `<div class="empty">No one matches that search.</div>`}
+        </div>`;
+    }
+
+    function renderProjects() {
+      const projects = model.projects.filter((p) => p.tokens > 0);
+      const models = model.models.filter((m) => m.tokens > 0);
+      const max = Math.max(1, ...projects.map((p) => p.tokens));
+      const colorFor = (i) => (i < MODEL_COLORS.length ? MODEL_COLORS[i] : OTHER_COLOR);
+      const PCOLS = "minmax(0,1.6fr) minmax(0,2fr) minmax(0,0.7fr) minmax(0,0.8fr)";
+      const MCOLS = "minmax(0,2fr) minmax(0,1fr) minmax(0,0.8fr) minmax(0,1fr)";
+      return `
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px;align-items:start;">
+          <section class="panel table">
+            <div class="panel-head"><h2>Projects</h2><span class="muted" style="font-size:12px;">${projects.length} with usage</span></div>
+            <div class="trow head" style="grid-template-columns:${PCOLS};min-width:520px;"><span>Project</span><span>Tokens</span><span class="num">People</span><span class="num">Context reuse</span></div>
+            ${projects.map((p) => `
+              <div class="trow" style="grid-template-columns:${PCOLS};min-width:520px;">
+                <span class="mono ellipsis" style="font-size:13px;">${esc(p.name)}</span>
+                <span class="tokens-cell"><span class="mono">${compact(p.tokens)}</span><span class="bar"><div style="width:${(p.tokens / max) * 100}%"></div></span><span class="mono">${pct(p.tokens / model.total)}</span></span>
+                <span class="mono num" style="font-size:13px;color:var(--ink-3);">${p.people.size}</span>
+                <span class="mono num" style="font-size:13px;color:var(--ink-3);">${pct(p.tokens ? p.cache / p.tokens : 0)}</span>
+              </div>`).join("") || `<div class="empty">No project usage in this range.</div>`}
+          </section>
+          <section class="panel table">
+            <div class="panel-head" style="flex-direction:column;align-items:stretch;gap:14px;">
+              <h2>Models</h2>
+              <div class="mix" aria-hidden="true">${models.map((m, i) => `<div style="flex:${m.tokens} 1 0;background:${colorFor(i)};border-radius:${i === 0 ? "3px 0 0 3px" : i === models.length - 1 ? "0 3px 3px 0" : "0"};"></div>`).join("")}</div>
+            </div>
+            <div class="trow head" style="grid-template-columns:${MCOLS};min-width:420px;"><span>Model</span><span class="num">Tokens</span><span class="num">Share</span><span class="num">Web searches</span></div>
+            ${models.map((m, i) => `
+              <div class="trow" style="grid-template-columns:${MCOLS};min-width:420px;">
+                <span style="display:flex;align-items:center;gap:10px;min-width:0;"><span style="width:8px;height:8px;border-radius:2px;background:${colorFor(i)};flex-shrink:0;"></span><span class="mono ellipsis" style="font-size:12px;">${esc(m.name)}</span></span>
+                <span class="mono num" style="font-size:13px;">${compact(m.tokens)}</span>
+                <span class="mono num" style="font-size:13px;color:var(--ink-3);">${pct(m.tokens / model.total)}</span>
+                <span class="mono num" style="font-size:13px;color:var(--ink-3);">${int(m.web)}</span>
+              </div>`).join("") || `<div class="empty">No model usage in this range.</div>`}
+          </section>
+        </div>`;
+    }
+
+    function sessionRows() {
+      return model.people.flatMap((p) => p.sessions.map((s) => ({ s, p })))
+        .filter(({ s }) => state.sessionFilter === "all" || (state.sessionFilter === "sub" ? s.is_subagent : !s.is_subagent))
+        .sort((a, b) => num(b.s.reported_total) - num(a.s.reported_total));
+    }
+
+    function renderSessions() {
+      const rows = sessionRows();
+      const filters = [["all", "All"], ["main", "Main"], ["sub", "Subagents"]].map(([id, label]) => `<button data-action="session-filter" data-id="${id}" aria-pressed="${state.sessionFilter === id}">${label}</button>`).join("");
+      const COLS = "minmax(0,1.3fr) minmax(0,1.5fr) minmax(0,1.6fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,1fr) minmax(0,1fr)";
+      return `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:16px;">
+          <div class="seg" role="group" aria-label="Session type">${filters}</div>
+          <span class="muted" style="font-size:12px;">Sorted by tokens · ${rows.length} session${rows.length === 1 ? "" : "s"}</span>
+        </div>
+        <div class="panel table">
+          <div class="trow head" style="grid-template-columns:${COLS}"><span>Session</span><span>Person</span><span>Project</span><span class="num">Tokens</span><span class="num">Duration</span><span class="num">Tokens / hr</span><span class="num">Last activity</span></div>
+          ${rows.slice(0, 200).map(({ s, p }) => `
+            <div class="trow clickable" style="grid-template-columns:${COLS}" ${personAction(p)}>
+              <span style="display:flex;align-items:center;gap:8px;min-width:0;"><span class="mono ellipsis" style="font-size:12px;" title="${esc(s.session_id)}">${esc(String(s.session_id).slice(0, 8))}</span>${s.is_subagent ? `<span class="tag">subagent</span>` : ""}</span>
+              <span class="ellipsis" style="font-size:13px;">${esc(p.name)}</span>
+              <span class="mono ellipsis" style="font-size:12px;color:var(--ink-3);">${esc(s.project_name || s.project)}</span>
+              <span class="mono num" style="font-size:13px;">${compact(s.reported_total)}</span>
+              <span class="mono num" style="font-size:13px;color:var(--ink-3);">${duration(s.duration_seconds)}</span>
+              <span class="mono num" style="font-size:13px;color:var(--ink-3);">${num(s.tokens_per_hour) ? compact(s.tokens_per_hour) : "—"}</span>
+              <span class="num" style="font-size:13px;color:var(--ink-3);">${esc(timeAgo(s.last_ts))}</span>
+            </div>`).join("") || `<div class="empty">No sessions in this range.</div>`}
+          ${rows.length > 200 ? `<div class="empty" style="padding:16px;">Showing the 200 largest sessions.</div>` : ""}
+        </div>`;
+    }
+
+    function renderCollectors() {
+      const collectors = model.people.filter((p) => p.meta || p.surfaces.size);
+      const surfaceCount = (surface) => collectors.filter((p) => p.surfaces.has(surface)).length;
+      const stats = [
+        ["Claude Code", surfaceCount("claude_code"), "exact token counts"],
+        ["Claude Desktop", new Set(collectors.filter((p) => p.surfaces.has("desktop_chat") || p.surfaces.has("desktop_app")).map((p) => p.key)).size, "activity only, no token counts"],
+        ["Cowork", surfaceCount("cowork"), "activity only, no token counts"],
+        ["Extensions", surfaceCount("extensions"), "configuration detected"],
+      ].map(([label, value, note]) => `<div><span style="font-size:13px;color:var(--ink-3);">${label}</span><strong>${value}</strong><span class="muted" style="font-size:12px;">${value === 1 ? "collector" : "collectors"}, ${note}</span></div>`).join("");
+      const COLS = "minmax(0,1.6fr) minmax(0,1.4fr) minmax(0,0.8fr) minmax(0,1fr) minmax(0,1.6fr) minmax(0,1fr)";
+      const tone = { bad: ["#fbe5e3", "#b42c2c"], warn: ["#fbefd5", "#9a5b00"] };
+      return `
+        <section class="panel stat-strip" style="margin-bottom:20px;">${stats}</section>
+        <section class="panel table" style="margin-bottom:20px;">
+          <div class="panel-head"><h2>Collectors</h2><span class="muted" style="font-size:12px;">A collector counts as stale after 2 hours without a sync</span></div>
+          <div class="trow head" style="grid-template-columns:${COLS}"><span>Machine</span><span>Platform</span><span>Version</span><span>Last sync</span><span>Surfaces found</span><span>Status</span></div>
+          ${collectors.map((p) => `
+            <div class="trow clickable" style="grid-template-columns:${COLS}" ${personAction(p)}>
+              <span class="stack"><span class="mono ellipsis" style="font-size:12px;">${esc(p.machine)}</span><span class="sub ellipsis" style="font-size:12px;">${esc(p.name)}</span></span>
+              <span class="ellipsis" style="font-size:13px;color:var(--ink-3);">${esc(platformLabel(p.platform) || "—")}</span>
+              <span class="mono" style="font-size:12px;color:var(--ink-3);">${esc(p.version || "—")}</span>
+              <span style="font-size:13px;color:var(--ink-3);">${esc(timeAgo(p.lastSync))}</span>
+              <span class="ellipsis" style="font-size:12px;color:var(--ink-3);">${esc(surfaceList(p.surfaces) || "—")}</span>
+              ${p.meta ? statusBadge(p) : `<span class="muted" style="font-size:12px;">No usage synced</span>`}
+            </div>`).join("")}
+        </section>
+        <section class="panel" style="padding:18px 20px 6px;">
+          <h2 style="margin:0 0 6px;font-size:14px;font-weight:600;">Open issues</h2>
+          ${model.issues.map((issue) => `
+            <div class="issue">
+              <div class="issue-icon" style="background:${tone[issue.tone][0]};"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="${tone[issue.tone][1]}" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M6 3.2V6.3M6 8.6h.01"></path></svg></div>
+              <div class="stack" style="gap:3px;"><span style="font-size:13px;">${esc(issue.title)}</span><span class="muted" style="font-size:12px;">${esc(issue.detail)}</span></div>
+              <span class="muted" style="font-size:12px;">${esc(issue.seen)}</span>
+            </div>`).join("") || `<div class="muted" style="padding:12px 0 14px;border-top:1px solid var(--line-soft);font-size:13px;">Nothing needs attention.</div>`}
+        </section>`;
+    }
+
+    // ---------------------------------------------------------------------------
+    // Rendering: person drawer
+    // ---------------------------------------------------------------------------
+    function renderDrawer() {
+      const p = model && state.selected ? model.byKey.get(state.selected) : null;
+      if (!p) return "";
+      const days = [];
+      const spanDays = Math.min(model.range.days || 30, 30);
+      for (let i = spanDays - 1; i >= 0; i--) days.push(p.days.get(dayKey(addDays(model.today, -i))) || 0);
+      const peak = Math.max(...days);
+      const tools = p.tools.slice().sort((a, b) => b.calls - a.calls).slice(0, 4);
+      const surfaces = surfaceList(p.surfaces);
+      return `
+        <div class="scrim" data-action="close-person"></div>
+        <aside class="drawer" role="dialog" aria-label="${esc(p.name)}">
+          <div class="drawer-head">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
+              <div style="display:flex;align-items:center;gap:12px;min-width:0;">
+                <div class="avatar" style="width:40px;height:40px;border-radius:20px;font-size:13px;">${esc(initials(p.name))}</div>
+                <div class="stack" style="gap:2px;">
+                  ${state.editing ? `
+                    <form data-action="save-alias" style="display:flex;gap:6px;align-items:center;">
+                      <input class="input" style="height:28px;width:180px;" data-input="draft" data-focus="draft" value="${esc(state.draft)}" aria-label="Display name">
+                      <button class="btn primary" style="height:28px;font-size:12px;" type="submit">Save</button>
+                      <button class="link-btn" style="font-size:12px;" type="button" data-action="cancel-edit">Cancel</button>
+                    </form>` : `
+                    <div style="display:flex;align-items:center;gap:8px;">
+                      <span class="ellipsis" style="font-size:16px;font-weight:600;letter-spacing:-0.01em;">${esc(p.name)}</span>
+                      <button class="link-btn" style="font-size:12px;" data-action="start-edit">Rename</button>
+                    </div>`}
+                  <span class="mono muted ellipsis" style="font-size:12px;">${esc(p.machine)}${platformLabel(p.platform) ? ` · ${esc(platformLabel(p.platform))}` : ""}</span>
+                </div>
+              </div>
+              <button class="btn icon" style="border:0;background:none;" data-action="close-person" aria-label="Close">${icon("M4 4l8 8M12 4l-8 8", 14)}</button>
+            </div>
+            ${p.meta ? `<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-3);">${statusBadge(p)}<span>· synced ${esc(timeAgo(p.lastSync))} · agent ${esc(p.version || "unknown")}</span></div>` : ""}
+          </div>
+          <div class="drawer-why">
+            <span class="muted" style="font-size:12px;">Why usage is ${p.share >= 0.2 ? "high" : "what it is"}</span>
+            ${p.reasons.map((r) => `<span class="reason">${esc(r.text)}</span>`).join("")}
+            ${tools.length ? `<span class="muted" style="font-size:12px;">Top tools: ${esc(tools.map((t) => `${t.tool} ${int(t.calls)}`).join(" · "))} (latest sync window)</span>` : ""}
+          </div>
+          <div class="drawer-body">
+            <div class="big-stats">
+              <div><span class="muted" style="font-size:12px;">Tokens</span><strong>${compact(p.tokens)}</strong></div>
+              <div><span class="muted" style="font-size:12px;">Share of team</span><strong>${pct(p.share)}</strong></div>
+              <div><span class="muted" style="font-size:12px;">Context reuse</span><strong>${pct(p.tokens ? p.cache / p.tokens : 0)}</strong></div>
+            </div>
+            ${peak ? `
+              <div class="stack" style="gap:10px;">
+                <span class="muted" style="font-size:12px;">Daily tokens, last ${spanDays} days</span>
+                <div style="height:64px;display:flex;align-items:flex-end;gap:2px;border-bottom:1px solid #c9c6bd;">${days.map((v) => `<div title="${compact(v)}" style="flex:1 1 0;height:${v ? Math.max(2, (v / peak) * 64) : 0}px;background:var(--data);border-radius:2px 2px 0 0;"></div>`).join("")}</div>
+              </div>` : ""}
+            ${list("Projects", sortedEntries(p.projects).slice(0, 6).map(([name, tokens]) => [name, compact(tokens)]), true)}
+            ${list("Models", sortedEntries(p.models).slice(0, 4).map(([name, tokens]) => [name, compact(tokens)]), true)}
+            ${list("Collector", [["Account", p.account || "—"], ["Surfaces found", surfaces || "—"], ["Requests", int(p.requests)], ["Sessions in range", String(p.sessions.length)]], false)}
+          </div>
+        </aside>`;
+    }
+
+    function list(title, rows, mono) {
+      if (!rows.length) return "";
+      return `<div class="stack"><span class="muted" style="font-size:12px;margin-bottom:6px;">${title}</span>${rows.map(([k, v]) => `<div class="kv"><span class="${mono ? "mono" : ""} ellipsis" style="${mono ? "font-size:12px;color:var(--ink);" : ""}">${esc(k)}</span><span class="${mono ? "mono" : ""}" style="${mono ? "font-size:12px;color:var(--ink-3);" : ""}">${esc(v)}</span></div>`).join("")}</div>`;
+    }
+
+    // ---------------------------------------------------------------------------
+    // Actions
+    // ---------------------------------------------------------------------------
+    function exportCsv() {
+      if (!model) return;
+      let name = "people";
+      let rows;
+      if (state.tab === "projects") {
+        name = "projects";
+        rows = model.projects.map((p) => ({ project: p.name, tokens: p.tokens, share: (p.tokens / (model.total || 1)).toFixed(4), people: p.people.size, cache_share: (p.tokens ? p.cache / p.tokens : 0).toFixed(4), requests: p.requests }));
+      } else if (state.tab === "sessions") {
+        name = "sessions";
+        rows = sessionRows().map(({ s, p }) => ({ session_id: s.session_id, person: p.name, machine: p.machine, project: s.project_name || s.project, subagent: s.is_subagent, tokens: s.reported_total, duration_seconds: s.duration_seconds, first_ts: s.first_ts, last_ts: s.last_ts }));
+      } else {
+        rows = model.people.filter((p) => p.meta || p.tokens).map((p) => ({ person: p.name, machine: p.machine, account: p.account, tokens: p.tokens, share: p.share.toFixed(4), requests: p.requests, top_project: p.topProject, top_model: p.topModel, reasons: p.reasons.map((r) => r.text).join("; "), last_sync: p.lastSync || "", status: p.status.label }));
+      }
+      if (!rows.length) return;
       const headers = Object.keys(rows[0]);
-      const csv = [
-        headers.join(","),
-        ...rows.map((row) => headers.map((key) => `"${String(row[key] ?? "").replaceAll('"', '""')}"`).join(",")),
-      ].join("\n");
-      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
+      const csv = [headers.join(","), ...rows.map((row) => headers.map((h) => `"${String(row[h] ?? "").replaceAll('"', '""')}"`).join(","))].join("\n");
+      const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${name}-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.download = `claude-usage-${name}-${model.range.id}-${dayKey(new Date())}.csv`;
       a.click();
       URL.revokeObjectURL(url);
     }
 
-    $("save").addEventListener("click", saveSettings);
-    $("login").addEventListener("click", login);
-    $("refresh").addEventListener("click", refresh);
-    $("windowDays").addEventListener("change", refresh);
-    $("surfaceFilter").addEventListener("change", renderCurrent);
-    $("clearSelection").addEventListener("click", () => { selectedKey = null; renderCurrent(); });
-    $("aliasSave").addEventListener("click", saveAlias);
-    $("exportPeople").addEventListener("click", () => exportCsv("claude-usage-people", exportRows.people));
-    $("exportProjects").addEventListener("click", () => exportCsv("claude-usage-projects", exportRows.projects));
-    $("exportModels").addEventListener("click", () => exportCsv("claude-usage-models", exportRows.models));
-    loadSettings();
+    const actions = {
+      tab: (el) => { state.tab = el.dataset.id; store.set("tab", state.tab); render(); },
+      range: (el) => { state.range = el.dataset.id; store.set("range", state.range); refresh(); },
+      lens: (el) => { state.lens = el.dataset.id; render(); },
+      "session-filter": (el) => { state.sessionFilter = el.dataset.id; render(); },
+      "open-person": (el) => { state.selected = el.dataset.key; state.editing = false; render(); },
+      "close-person": () => { state.selected = null; state.editing = false; render(); },
+      "start-edit": () => { const p = model.byKey.get(state.selected); state.editing = true; state.draft = p ? p.name : ""; render(); },
+      "cancel-edit": () => { state.editing = false; render(); },
+      refresh: () => refresh(),
+      export: () => exportCsv(),
+      "sign-out": () => signOut(),
+      "toggle-connection": () => {
+        state.signin.showConnection = !state.signin.showConnection;
+        if (!state.signin.showConnection) {
+          store.set("supabaseUrl", state.config.supabaseUrl); store.set("anonKey", state.config.supabaseKey); store.set("orgId", state.config.orgId);
+          connect();
+        }
+        render();
+      },
+      "signin-reset": () => { state.signin.sent = false; render(); },
+    };
+
+    document.addEventListener("click", (event) => {
+      const el = event.target.closest("[data-action]");
+      if (!el || el.tagName === "FORM") return;
+      const handler = actions[el.dataset.action];
+      if (handler) { event.preventDefault(); handler(el); }
+    });
+    document.addEventListener("submit", (event) => {
+      const form = event.target.closest("form[data-action]");
+      if (!form) return;
+      event.preventDefault();
+      if (form.dataset.action === "send-link") sendLink();
+      if (form.dataset.action === "save-alias") saveAlias();
+    });
+    document.addEventListener("input", (event) => {
+      const el = event.target.closest("[data-input]");
+      if (!el) return;
+      const key = el.dataset.input;
+      if (key === "query") { state.query = el.value; render(); }
+      else if (key === "draft") state.draft = el.value;
+      else if (key === "signin-email") state.signin.email = el.value;
+      else if (key.startsWith("config-")) state.config[key.slice(7)] = el.value.trim();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && state.selected) { state.selected = null; state.editing = false; render(); }
+      const el = event.target.closest?.('[role="button"][data-action]');
+      if (el && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); el.click(); }
+    });
+    let resizeTimer = null;
+    window.addEventListener("resize", () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => { if (state.tab === "share") layoutField(); }, 120);
+    });
+
+    async function boot() {
+      if (window.DASHBOARD_FIXTURE) {
+        // Test hook: render recorded view rows without Supabase.
+        state.user = { email: window.DASHBOARD_FIXTURE.email || "fixture@example.com" };
+        state.authChecked = true;
+        return refresh();
+      }
+      connect();
+      state.user = await checkAuth().catch(() => null);
+      state.authChecked = true;
+      render();
+      if (state.user) refresh();
+      client?.auth.onAuthStateChange((event, session) => {
+        if (event === "SIGNED_IN" && session?.user && !state.user) { state.user = session.user; refresh(); }
+        if (event === "SIGNED_OUT") { state.user = null; render(); }
+      });
+    }
+    boot();
   </script>
 </body>
 </html>
