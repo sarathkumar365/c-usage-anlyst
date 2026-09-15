@@ -1,8 +1,16 @@
 # Claude Usage Analyzer
 
-Cross-platform Claude usage and activity analyzer with a metrics-only team collector.
+Per-person usage tracking for a Claude subscription that a whole team shares.
 
-It reports exact token usage from Claude Code transcripts and derived/evidence activity from local Claude Desktop, Cowork, and extension metadata.
+A small collector runs on each team member's machine, reads local Claude usage data, and uploads metrics only (never prompts or responses) to a shared dashboard.
+
+- [Why this exists](#why-this-exists)
+- [Install](#install) — [macOS](#macos) · [Linux](#linux) · [Windows](#windows)
+- [After installing](#after-installing) — check, update, uninstall, troubleshooting
+- [Admin setup](#admin-setup)
+- [Dashboard](#dashboard)
+- [Privacy](#privacy)
+- [Development](#development)
 
 ## Why This Exists
 
@@ -15,7 +23,7 @@ This project answers exactly those questions for a shared account:
 - **What** they are working on: projects, models, tools, and sessions.
 - **Where** the usage comes from: Claude Code, Claude Desktop, Cowork, extensions.
 
-Every design choice should be judged against these goals. The collector sends metrics only, never prompt or response content.
+Every design choice should be judged against these goals.
 
 ### What each machine can and cannot see
 
@@ -29,133 +37,249 @@ Every design choice should be judged against these goals. The collector sends me
 
 claude.ai web and Desktop chat conversations live on Anthropic's servers, and Pro/Max accounts have no usage API, so their per-person tokens cannot be measured. The dashboard instead compares rises in the account's usage % with activity from tracked machines and shows the untracked share as an estimate.
 
-Not collected on purpose: prompts and responses, session titles, browser history or cookies, Claude credentials (so no calls to Anthropic's private usage endpoints), and other OS users on the same machine (install once per user).
-
-## How It Is Organized
-
-Every piece of work belongs to one flow. Each flow is one module that receives already-resolved inputs and owns its own side effects.
-
-| Flow | Agent code | Server code | Writes |
-|---|---|---|---|
-| Discover | `claude_usage/flows/discover.py` → `discovery.py` | – | `state.json` (`discovery`) |
-| Collect | `claude_usage/flows/collect.py` → `transcripts.py` | – | nothing |
-| Enroll | `claude_usage/flows/enroll.py` | `supabase/functions/enroll` | `config.json`, `collector_tokens`, `enrollment_attempts` |
-| Sync | `claude_usage/flows/sync.py` → `accounts.py`, `plan_usage.py`, `desktop_sessions.py`, `activity.py`, `anomalies.py`, `payload.py` | `supabase/functions/ingest` | `state.json`, usage, account and plan usage tables |
-| Statusline capture | `claude_usage/flows/statusline.py` | – | Claude `settings.json` (`statusLine`), agent `config.json`, `plan-samples.jsonl` |
-| Preflight / status | `claude_usage/flows/preflight.py`, `status.py` | – | `state.json` (via discover) |
-| Reports | `claude_usage/reports/` (plain, verbose, sources, export) | – | export files only |
-| Dashboard | `dashboard/index.html` | `dashboard_*` views in `supabase/schema.sql` | `identity_aliases` (admins) |
-| Install | `install/install.sh`, `install/install.ps1` | – | agent dir, OS scheduler |
-
-Shared building blocks: `cli.py` (argument parsing and dispatch only), `paths.py` (the single Claude/agent directory resolver), `store.py` (the only reader/writer of `config.json`/`state.json`), `identity.py`, `transport.py` (HTTP), `models.py`, `metrics.py`, `ui.py`, `util.py`, `constants.py`. `claude_usage_analyzer.py` is only the entry point.
-
-A sync runs: collect transcripts from every Claude dir → discover sources → read accounts, plan usage and Desktop sessions → extract activity → build the payload (pure, no I/O) → upload → record the outcome and plan usage cursor in `state.json`. Ingest runs: authenticate token → validate payload → skip duplicates → write usage rows → record the run.
-
-Database changes go in `supabase/migrations/` and are folded into `supabase/schema.sql`, which stays safe to re-run.
-
-## Tests
-
-```bash
-python3 -m unittest discover -s tests -t .
-```
-
-`tests/fixture_home.py` builds a deterministic fake home (Claude Code transcripts plus Desktop/Cowork data) used by the flow and CLI tests.
-
-## Local Report
-
-```bash
-python3 claude_usage_analyzer.py
-```
-
-The default output is a colored, plain-English terminal report. Use the old detailed tables with:
-
-```bash
-python3 claude_usage_analyzer.py --verbose
-```
-
-Inspect discovered Claude surfaces with:
-
-```bash
-python3 claude_usage_analyzer.py --sources
-```
-
-## Collector Setup
-
-Create a Supabase project, apply `supabase/schema.sql`, and deploy `supabase/functions/enroll` and `supabase/functions/ingest` (both with JWT verification off; they authenticate with the enrollment secret and collector tokens).
-
-Current configured Supabase project:
-
-```text
-Project : c-usage-anlyst
-Ref     : yeokmzmmldqjngwtrfso
-URL     : https://yeokmzmmldqjngwtrfso.supabase.co
-Org ID  : team-main
-Ingest  : https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/ingest
-Dashboard: https://claude-usage-dashboard.netlify.app
-```
-
-First setup:
-
-```sql
-insert into organizations(id, name)
-values ('team-main', 'Team Main')
-on conflict (id) do nothing;
-```
-
-Dashboard sign-in is invite-only: turn off "Allow new users to sign up" in Supabase Auth, invite each person from the Supabase Auth dashboard, then add them to the organization:
-
-```sql
-insert into org_members(org_id, user_id, role, can_view_history)
-values ('team-main', '00000000-0000-0000-0000-000000000000', 'admin', true);
-```
-
 ## Install
 
-Enrollment requires a shared secret. Only its SHA-256 hash is stored, in the `enrollment_secrets` table (RLS on, no client access). Use at least 32 random bytes:
+Install once on **every machine and every OS user account** that uses the shared Claude account. You need the **enrollment secret** from your admin; the installer asks for it with hidden input. Never paste it into a command, chat, or ticket.
+
+No admin rights are needed on any platform. Everything installs into your user account.
+
+| Platform | Supported | Scheduler | Agent folder |
+|---|---|---|---|
+| macOS 11+ | Apple Silicon, Intel | LaunchAgent | `~/.claude-usage-agent` |
+| Linux | x64, arm64 | systemd user timer, or cron | `~/.claude-usage-agent` |
+| Windows 10/11 | x64 | Task Scheduler | `%LOCALAPPDATA%\ClaudeUsageAgent` |
+
+### macOS
+
+Open **Terminal** and download the installer:
+
+```bash
+curl --proto '=https' -fsSL https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/v0.8.0/install/install.sh -o /tmp/claude-usage-install.sh
+```
+
+Run it, and enter the enrollment secret when asked:
+
+```bash
+sh /tmp/claude-usage-install.sh
+```
+
+Downloading first, instead of `curl … | sh`, means a dropped connection can never run half a script.
+
+- Needs `curl` and `tar`, both built into macOS.
+- The sync runs every 30 minutes while you are logged in, from `~/Library/LaunchAgents/com.internal.claude-usage-agent.plist`.
+
+### Linux
+
+Same two commands in a terminal:
+
+```bash
+curl --proto '=https' -fsSL https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/v0.8.0/install/install.sh -o /tmp/claude-usage-install.sh
+```
+
+```bash
+sh /tmp/claude-usage-install.sh
+```
+
+- Needs `curl`, `tar`, and `sha256sum` or `shasum`. On minimal images install them first, for example `sudo apt install curl tar coreutils`.
+- Uses a systemd user timer (`~/.config/systemd/user/claude-usage-agent.timer`) when `systemctl` is available, otherwise a crontab entry.
+- A systemd user timer only runs while you are logged in. For a server or a machine you use over SSH, keep it running after logout:
+
+  ```bash
+  loginctl enable-linger "$USER"
+  ```
+
+**WSL:** if you use Claude Code inside WSL on a Windows PC, install with the [Windows](#windows) installer only. It already reads Claude Code data from single-user WSL distros. Installing in both would count the same usage twice. One gap: the usage % statusline capture is not added inside WSL.
+
+### Windows
+
+Open **PowerShell** (not Command Prompt; Windows PowerShell 5.1 and PowerShell 7 both work) as your normal user, not as Administrator, and run:
+
+```powershell
+irm https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/v0.8.0/install/install.ps1 | iex
+```
+
+Enter the enrollment secret when asked.
+
+- `irm` downloads the whole script before `iex` runs it, so no separate download step is needed. Execution policy does not block this.
+- The sync runs every 30 minutes as the scheduled task **Claude Usage Agent**, while you are logged in.
+- If the download fails with a TLS or "could not create SSL/TLS secure channel" error (old Windows PowerShell 5.1), run this first in the same window, then retry:
+
+  ```powershell
+  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+  ```
+
+- If antivirus quarantines `claude-usage-agent.exe`, ask your admin. The installer only runs it after checking its SHA-256 against the release.
+
+### What the installer does
+
+1. Checks the system and that the server is reachable.
+2. Downloads the agent for the pinned release and verifies it against that release's `SHA256SUMS`. It stops if the checksum does not match.
+3. Enrolls the machine. Re-running it re-enrolls with the machine's existing token.
+4. Adds the usage % statusline capture to Claude Code. Any statusline you already have keeps working, and `settings.json` is backed up first.
+5. Syncs all available history once.
+6. Schedules a sync every 30 minutes that resends the last 30 days.
+
+When it finishes it prints the collector status. Every problem is printed as a `BLOCKED` line with a `FIX` line under it.
+
+### Installer options
+
+Set these before running the installer. On macOS/Linux put them in front of `sh`, for example `SKIP_STATUSLINE=1 sh /tmp/claude-usage-install.sh`. On Windows set them first, for example `$env:SKIP_STATUSLINE = '1'`, then run the `irm` command in the same window.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `SKIP_STATUSLINE` | unset | `1` skips the usage % statusline capture |
+| `SKIP_SCHEDULER` | unset | `1` installs without scheduling syncs |
+| `SYNC_INTERVAL_MINUTES` | `30` | How often the scheduled sync runs |
+| `SYNC_DAYS` | `30` | Days each scheduled sync resends |
+| `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code config dir, if you moved it |
+| `ACCOUNT_LABEL` / `COLLECTOR_LABEL` | OS username / hostname | Names shown for this machine in the dashboard |
+| `AGENT_VERSION` | the version in the URL | Release to install |
+| `ALLOW_SOURCE_FALLBACK` | unset | `1` runs the release's Python source (3.8+) if the binary can't be downloaded |
+| `CLAUDE_USAGE_AGENT_DIR` | see table above | Agent folder (macOS/Linux only) |
+
+## After Installing
+
+### Check it is working
+
+macOS/Linux:
+
+```bash
+~/.claude-usage-agent/claude-usage-agent --status
+```
+
+Windows PowerShell:
+
+```powershell
+& "$env:LOCALAPPDATA\ClaudeUsageAgent\claude-usage-agent.exe" --status
+```
+
+`Last sync` should be within the last 30 minutes. If it isn't, run a sync by hand to see the error: replace `--status` with `--sync --days 30` in the command above. On macOS/Linux, scheduled sync output is also in `~/.claude-usage-agent/logs/` (`sync.log`, `sync.err`).
+
+### Update
+
+Run the install command again with the new version in the URL. The machine keeps its identity and token.
+
+### Uninstall
+
+macOS:
+
+```bash
+~/.claude-usage-agent/claude-usage-agent --uninstall-statusline
+```
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.internal.claude-usage-agent.plist && rm ~/Library/LaunchAgents/com.internal.claude-usage-agent.plist
+```
+
+```bash
+rm -rf ~/.claude-usage-agent
+```
+
+Linux:
+
+```bash
+~/.claude-usage-agent/claude-usage-agent --uninstall-statusline
+```
+
+```bash
+systemctl --user disable --now claude-usage-agent.timer; rm -f ~/.config/systemd/user/claude-usage-agent.service ~/.config/systemd/user/claude-usage-agent.timer
+```
+
+If cron was used instead, remove the `claude-usage-agent` line with `crontab -e`. Then:
+
+```bash
+rm -rf ~/.claude-usage-agent
+```
+
+Windows PowerShell:
+
+```powershell
+& "$env:LOCALAPPDATA\ClaudeUsageAgent\claude-usage-agent.exe" --uninstall-statusline
+```
+
+```powershell
+Unregister-ScheduledTask -TaskName "Claude Usage Agent" -Confirm:$false
+```
+
+```powershell
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\ClaudeUsageAgent"
+```
+
+Uninstalling stops new uploads. Data already uploaded stays in the dashboard; ask an admin to remove it.
+
+### Troubleshooting
+
+| Message | Meaning and fix |
+|---|---|
+| `Supabase enroll unreachable` | No route to the server. Check internet, VPN, proxy or firewall, then rerun. |
+| `Enrollment failed` / `invalid enrollment secret` | Wrong or old secret. Get the current one from your admin and rerun. |
+| `too many failed attempts` | 10 wrong secrets from your network in the last hour. Wait an hour. |
+| `Checksum mismatch` | The download doesn't match the release. Don't run it; retry later and tell your admin if it repeats. |
+| `Unsupported OS/CPU` | Only the platforms in the table above have binaries. |
+| `Claude projects dir missing` (warning) | Claude Code hasn't been used by this OS user yet. Installing is still fine. |
+| Sync fails with HTTP 403 | The machine's token was revoked, for example after a server reset. Rerun the install command. |
+| Sync fails with HTTP 429 | A sync ran less than 10 seconds after the previous one. The next scheduled sync will succeed. |
+
+## Admin Setup
+
+Current project:
+
+```text
+Supabase project : c-usage-anlyst (yeokmzmmldqjngwtrfso)
+Org ID           : team-main
+Enroll           : https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/enroll
+Ingest           : https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/ingest
+Dashboard        : https://claude-usage-dashboard.netlify.app
+```
+
+### New server
+
+1. Create a Supabase project and apply `supabase/schema.sql` (safe to re-run).
+2. Deploy `supabase/functions/enroll` and `supabase/functions/ingest`, both with JWT verification off. They authenticate with the enrollment secret and collector tokens.
+3. Create the organization:
+
+   ```sql
+   insert into organizations(id, name)
+   values ('team-main', 'Team Main')
+   on conflict (id) do nothing;
+   ```
+
+4. In Supabase Auth, turn off **Allow new users to sign up**. Dashboard sign-in is invite-only.
+5. Host the dashboard (see [Dashboard](#dashboard)) and set the Supabase Auth Site URL to it.
+
+### Enrollment secret
+
+Only the secret's SHA-256 hash is stored, in `enrollment_secrets` (RLS on, no client access). Use at least 32 random bytes:
+
+```bash
+openssl rand -base64 32
+```
 
 ```sql
 insert into enrollment_secrets(secret_hash, org_id, label)
 values (encode(extensions.digest('<secret>', 'sha256'), 'hex'), 'team-main', 'install secret');
 ```
 
-Give the secret to installers out of band. The installer asks for it with hidden input, so it never lands in shell history or the process list, and it is not stored on the machine. Rotate by inserting a new row and setting `revoked_at` on the old one. Enrollment allows 10 failed attempts per IP per hour.
+Share it with installers privately. It is never stored on their machines. To rotate, insert a new row and set `revoked_at` on the old one; enrolled machines keep working, since they use their own tokens.
 
-macOS/Linux:
+Enrollment allows 10 failed attempts per IP per hour and 25 enrollments per IP per day.
 
-```bash
-curl --proto '=https' -fsSL https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/v0.8.0/install/install.sh -o /tmp/claude-usage-install.sh && sh /tmp/claude-usage-install.sh
+### Dashboard members
+
+Invite each person from the Supabase Auth dashboard, then add them to the organization:
+
+```sql
+insert into org_members(org_id, user_id, role, can_view_history)
+values ('team-main', '<auth user id>', 'member', false);
 ```
 
-Windows PowerShell:
+`role` is `member`, `admin` or `owner`. Admins manage the history permission in the dashboard under Collectors → Dashboard access.
 
-```powershell
-irm https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/v0.8.0/install/install.ps1 | iex
-```
+### Releasing a new collector version
 
-The installer:
-
-1. Checks the system, then downloads the agent binary for the pinned release and verifies it against that release's `SHA256SUMS` before running it. It stops if the checksum does not match. Running the tag's Python source instead is opt-in with `ALLOW_SOURCE_FALLBACK=1`.
-2. Enrolls the machine. Re-running it re-enrolls with the machine's current token; a collector ID that is already enrolled cannot be claimed without that token.
-3. Installs the usage % statusline capture (keeps any statusline the member already has and backs up `settings.json`; `SKIP_STATUSLINE=1` skips it, `--uninstall-statusline` removes it).
-4. Syncs all available history once: transcripts, plus older days from Claude Code's stats cache.
-5. Schedules a sync every 30 minutes that resends the last `SYNC_DAYS` (default 30) days.
-
-Agent files (`config.json` with the collector token, state, logs) are readable only by the installing user.
-
-Release binaries are built by GitHub Actions when a version tag matching `APP_VERSION` is pushed. The release gets `SHA256SUMS`, and a tag cannot overwrite binaries that were already published. Bump `AGENT_VERSION` in both installers and the install URLs above with each release.
-
-## Manual Collector Commands
-
-```bash
-python3 claude_usage_analyzer.py --status
-python3 claude_usage_analyzer.py --enroll          # reads ENROLLMENT_SECRET from the environment
-python3 claude_usage_analyzer.py --sync            # all history
-python3 claude_usage_analyzer.py --sync --days 30
-python3 claude_usage_analyzer.py --sync --dry-run --days 30
-python3 claude_usage_analyzer.py --sync --surface desktop --days 30
-python3 claude_usage_analyzer.py --install-statusline
-python3 claude_usage_analyzer.py --uninstall-statusline
-```
+1. Bump `APP_VERSION` in `claude_usage/constants.py`, `AGENT_VERSION` in both installers, and the install URLs in this README.
+2. Commit, then push a matching tag, for example `v0.8.1`.
+3. GitHub Actions tests, builds the five binaries, and publishes them with `SHA256SUMS`. A tag cannot overwrite binaries that were already published.
 
 ## Dashboard
 
@@ -178,7 +302,7 @@ Data pages (People, Projects & models, Sessions, Collectors) and a person panel 
 - Admins (`role` admin or owner) manage the history permission in Collectors → Dashboard access.
 - Sign-in uses a magic link with PKCE, so open the link in the same browser that requested it.
 
-## Privacy Defaults## Privacy Defaults
+## Privacy
 
 The collector uploads metrics only:
 
@@ -195,4 +319,63 @@ The collector uploads metrics only:
 
 Project paths, which contain the OS username, are sent only as a salted hash plus their last two folder names. The machine's network name (FQDN) is not sent, and home-path and email hashes are salted per organization.
 
-It does not upload prompts, responses, raw transcript text, session titles, login emails, raw discovered paths, source file contents, Claude credentials, or API keys.
+It does not upload prompts, responses, raw transcript text, session titles, login emails, raw discovered paths, source file contents, browser history or cookies, Claude credentials, or API keys. It makes no calls to Anthropic's private usage endpoints, and it only reads the OS user it is installed for.
+
+Agent files (`config.json` with the collector token, state, logs) are readable only by the installing user.
+
+## Development
+
+### Local report
+
+Runs from a checkout with Python 3.9+ and no dependencies:
+
+```bash
+python3 claude_usage_analyzer.py
+```
+
+`--verbose` shows detailed tables and `--sources` lists the discovered Claude surfaces.
+
+### Manual collector commands
+
+```bash
+python3 claude_usage_analyzer.py --status
+python3 claude_usage_analyzer.py --enroll          # reads ENROLLMENT_SECRET from the environment
+python3 claude_usage_analyzer.py --sync            # all history
+python3 claude_usage_analyzer.py --sync --days 30
+python3 claude_usage_analyzer.py --sync --dry-run --days 30
+python3 claude_usage_analyzer.py --sync --surface desktop --days 30
+python3 claude_usage_analyzer.py --install-statusline
+python3 claude_usage_analyzer.py --uninstall-statusline
+```
+
+### Tests
+
+```bash
+python3 -m unittest discover -s tests -t .
+```
+
+`tests/fixture_home.py` builds a deterministic fake home (Claude Code transcripts plus Desktop/Cowork data) used by the flow and CLI tests.
+
+### How it is organized
+
+Every piece of work belongs to one flow. Each flow is one module that receives already-resolved inputs and owns its own side effects.
+
+| Flow | Agent code | Server code | Writes |
+|---|---|---|---|
+| Discover | `claude_usage/flows/discover.py` → `discovery.py` | – | `state.json` (`discovery`) |
+| Collect | `claude_usage/flows/collect.py` → `transcripts.py` | – | nothing |
+| Enroll | `claude_usage/flows/enroll.py` | `supabase/functions/enroll` | `config.json`, `collector_tokens`, `enrollment_attempts` |
+| Sync | `claude_usage/flows/sync.py` → `accounts.py`, `plan_usage.py`, `desktop_sessions.py`, `activity.py`, `anomalies.py`, `payload.py` | `supabase/functions/ingest` | `state.json`, usage, account and plan usage tables |
+| Statusline capture | `claude_usage/flows/statusline.py` | – | Claude `settings.json` (`statusLine`), agent `config.json`, `plan-samples.jsonl` |
+| Preflight / status | `claude_usage/flows/preflight.py`, `status.py` | – | `state.json` (via discover) |
+| Reports | `claude_usage/reports/` (plain, verbose, sources, export) | – | export files only |
+| Dashboard | `dashboard/index.html` | `dashboard_*` views in `supabase/schema.sql` | `identity_aliases` (admins) |
+| Install | `install/install.sh`, `install/install.ps1` | – | agent dir, OS scheduler |
+
+Shared building blocks: `cli.py` (argument parsing and dispatch only), `paths.py` (the single Claude/agent directory resolver), `store.py` (the only reader/writer of `config.json`/`state.json`), `identity.py`, `transport.py` (HTTP), `models.py`, `metrics.py`, `ui.py`, `util.py`, `constants.py`. `claude_usage_analyzer.py` is only the entry point.
+
+A sync runs: collect transcripts from every Claude dir → discover sources → read accounts, plan usage and Desktop sessions → extract activity → build the payload (pure, no I/O) → upload → record the outcome and plan usage cursor in `state.json`. Ingest runs: authenticate token → validate payload → skip duplicates → write usage rows → record the run.
+
+Database changes go in `supabase/migrations/` and are folded into `supabase/schema.sql`, which stays safe to re-run.
+
+Known limitations and the security audit are in [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
