@@ -24,6 +24,8 @@ Status values: `open`, `in-progress`, `fixed`, `deferred`, `wontfix`, `unverifie
 | KI-14 | Low | Repo hygiene | Committed plist contains a developer-local path | fixed |
 | KI-16 | Medium | Data integrity | Subagent transcripts merged into parent sessions | fixed |
 | KI-15 | High | Data integrity | Cross-file request duplication double-counts | fixed |
+| KI-17 | Medium | Dashboard | Resumed sessions report durations spanning days | open |
+| KI-18 | Low | Repo hygiene | Maintainer's LaunchAgent runs the working tree | open |
 
 ---
 
@@ -150,6 +152,19 @@ Status values: `open`, `in-progress`, `fixed`, `deferred`, `wontfix`, `unverifie
 - **Verify:** Check for repeated `message.id` across files in a real `~/.claude/projects` tree. If present, dedup globally by request ID.
 - **Confirmed (2026-09-14):** on the maintainer's Mac, 1,399 of 7,152 responses appeared in more than one file. The 90-day sync total fell from 2.63B to 2.09B tokens once deduplicated (549M, about 21% overcounted). The rows that only held copies were deleted from `usage_sessions`/`usage_daily` for that collector, with copies kept in `backup_20260914.stale_*_v070`. Other collectors are corrected when they update to 0.7.0.
 - **Fixed (v0.7.0):** `transcripts.dedupe_requests` keeps one request per response ID across all files and Claude dirs, preferring the non-sidechain, finalized copy from the older file.
+
+## KI-17 — Resumed sessions report durations spanning days
+
+- **File:** `claude_usage/transcripts.py` `summarize_sessions`; dashboard `reasonsFor`
+- **Problem:** A session's duration is its last request minus its first. A session resumed days later spans the gap, so the live dashboard showed "one 366h 05m session is 47% of the total" for cdhameja.
+- **Impact:** "Long session" reasons and work-lane bars overstate how long people actually worked.
+- **Fix direction:** Split a session into active spans at gaps longer than about 30 minutes, and report active time instead of wall-clock span.
+
+## KI-18 — Maintainer's LaunchAgent runs the working tree
+
+- **File:** `~/Library/LaunchAgents/com.internal.claude-usage-agent.plist` on the maintainer's Mac
+- **Problem:** It runs `/usr/bin/python3 <repo>/claude_usage_analyzer.py`, so half-finished edits sync every 30 minutes. During the v0.7.0 work one scheduled sync ran before the database migration and failed with HTTP 500.
+- **Fix direction:** Reinstall with `install/install.sh` so the agent runs the released binary from `~/.claude-usage-agent`.
 
 ---
 
