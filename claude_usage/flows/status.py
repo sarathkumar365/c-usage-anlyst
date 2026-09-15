@@ -52,7 +52,7 @@ def print_status(claude: ClaudePaths):
     plain_section("Claude Account")
     claude_dirs = claude_config_dirs(claude)
     desktop_dirs = desktop_data_dirs()
-    accounts = read_accounts(claude_dirs, desktop_dirs)
+    accounts = read_accounts(claude_dirs, desktop_dirs, salt=config.get("org_id") or "")
     for account in accounts:
         plain_metric("Account", account.organization_name or "unknown organization", f"{account.account_uuid[:8]} via {account.source}", "good")
     if not accounts:

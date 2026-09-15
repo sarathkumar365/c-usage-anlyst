@@ -11,7 +11,7 @@ from typing import Any
 
 from claude_usage.models import AccountSnapshot, FeatureUsage
 from claude_usage.paths import claude_json_path
-from claude_usage.util import read_json_file, stable_hash
+from claude_usage.util import private_hash, read_json_file
 
 
 UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
@@ -40,7 +40,7 @@ def _merge(accounts: dict[str, AccountSnapshot], snapshot: AccountSnapshot):
             setattr(current, field, value)
 
 
-def read_accounts(claude_dirs: list[Path], desktop_dirs: list[Path]) -> list[AccountSnapshot]:
+def read_accounts(claude_dirs: list[Path], desktop_dirs: list[Path], salt: str = "") -> list[AccountSnapshot]:
     accounts: dict[str, AccountSnapshot] = {}
     for claude_dir in claude_dirs:
         oauth = read_json_file(claude_json_path(claude_dir)).get("oauthAccount")
@@ -51,7 +51,7 @@ def read_accounts(claude_dirs: list[Path], desktop_dirs: list[Path]) -> list[Acc
             account_uuid=str(oauth["accountUuid"]),
             organization_uuid=_text(oauth.get("organizationUuid")),
             organization_name=_organization_name(oauth.get("organizationName")),
-            email_hash=stable_hash(email.strip().lower()) if email else None,
+            email_hash=private_hash(email.strip().lower(), salt) if email else None,
             billing_type=_text(oauth.get("billingType")),
             seat_tier=_text(oauth.get("seatTier")),
             user_rate_limit_tier=_text(oauth.get("userRateLimitTier")),

@@ -4,18 +4,18 @@ Findings from a code review on 2026-09-14 (working tree based on `b31a8ea` plus 
 
 Status values: `open`, `in-progress`, `fixed`, `deferred`, `wontfix`, `unverified`.
 
-`deferred` = accepted while in development; revisit before onboarding real users. KI-07/08 skew dashboard totals upward — check them first if numbers look high.
+`deferred` = accepted while in development; revisit before onboarding real users.
 
 | ID | Severity | Area | Title | Status |
 |----|----------|------|-------|--------|
 | KI-01 | Critical | Security | Unauthenticated enrollment + ingest trusts payload identity | fixed |
-| KI-02 | High | Security | Enrollment can revoke another collector's token | deferred |
+| KI-02 | High | Security | Enrollment can revoke another collector's token | fixed |
 | KI-03 | High | Security | `create_collector_token` likely callable by anon | fixed |
 | KI-04 | High | Data integrity | Idempotency key never repeats; `collector_runs` grows unbounded | fixed |
 | KI-05 | High | Data integrity | Partial ingest failure permanently drops data | fixed |
 | KI-06 | High | Data integrity | Hostname change forks machine/user IDs and double-counts | fixed |
-| KI-07 | Medium | Data integrity | Activity rows accumulate across days | partially fixed |
-| KI-08 | Medium | Discovery | False-positive sources from generic metadata names | deferred |
+| KI-07 | Medium | Data integrity | Activity rows accumulate across days | fixed |
+| KI-08 | Medium | Discovery | False-positive sources from generic metadata names | fixed |
 | KI-09 | High | Release | Untracked `claude_usage/` package breaks builds and Python fallback | fixed |
 | KI-10 | Low | Collector | Preflight "Last sync" always shows "never" | fixed |
 | KI-11 | Low | Database | `schema.sql` not re-runnable | fixed |
@@ -25,7 +25,7 @@ Status values: `open`, `in-progress`, `fixed`, `deferred`, `wontfix`, `unverifie
 | KI-16 | Medium | Data integrity | Subagent transcripts merged into parent sessions | fixed |
 | KI-15 | High | Data integrity | Cross-file request duplication double-counts | fixed |
 | KI-17 | Medium | Dashboard | Resumed sessions report durations spanning days | fixed |
-| KI-18 | Low | Repo hygiene | Maintainer's LaunchAgent runs the working tree | open |
+| KI-18 | Low | Repo hygiene | Maintainer's LaunchAgent runs the working tree | fixed |
 
 ---
 
@@ -43,6 +43,8 @@ Status values: `open`, `in-progress`, `fixed`, `deferred`, `wontfix`, `unverifie
 - **Problem:** Enrolling with an existing `collector_id` revokes all active tokens for it. `collector_id` is visible to dashboard members.
 - **Impact:** Denial of service against a specific user's collector.
 - **Fix direction:** Only allow re-enrollment when authenticated with the current token (or an admin action); otherwise generate a new collector ID server-side.
+- **Worse than described (audit 2026-09-15):** since v0.7.0 re-enrollment also returned the victim's machine and user IDs, so anyone with the shared secret and a collector ID could take over that person's rows.
+- **Fixed (v0.8.0):** a collector ID that already has tokens can only be re-enrolled with its active token (`Authorization: Bearer`); otherwise enroll returns 409 and the collector starts a new ID.
 
 ## KI-03 — `create_collector_token` likely callable by anon
 
@@ -88,6 +90,7 @@ Status values: `open`, `in-progress`, `fixed`, `deferred`, `wontfix`, `unverifie
 - **Impact:** `dashboard_activity_daily` totals inflate over time. Also: `messages` is actually a file count, and Cowork `tool_calls` is the count of *enabled* MCP tools, not calls.
 - **Fix direction:** Bucket by per-file mtime (or per-session timestamps), or send snapshot semantics and replace rows per source. Rename or re-derive misleading metrics.
 - **Partially fixed (v0.7.0):** Desktop Code tab and Cowork activity now comes from session records, counted on each session's last-activity day (`desktop_sessions.py`), and the enabled-MCP-tool count is gone. Other Desktop/extension sources still use the latest-mtime day.
+- **Fixed (v0.8.0):** the remaining sources count files modified on each day (`activity.files_touched_per_day`), so re-syncing upserts the same per-day numbers.
 
 ## KI-08 — False-positive sources from generic metadata names
 
@@ -95,6 +98,7 @@ Status values: `open`, `in-progress`, `fixed`, `deferred`, `wontfix`, `unverifie
 - **Problem:** `settings.json` and `preferences` match anywhere under the scanned roots (depth 5) without requiring a Claude-named ancestor.
 - **Impact:** Unrelated apps (e.g. VS Code `settings.json`) are reported as `desktop_app` sources; inflates surface counts and activity.
 - **Fix direction:** Require a Claude/Anthropic-named ancestor for generic names.
+- **Fixed (v0.8.0):** generic names only count inside a Claude-named folder. On the maintainer's Mac discovery went from 99 to 57 sources.
 
 ## KI-09 — Untracked `claude_usage/` package breaks builds and Python fallback
 
@@ -169,6 +173,44 @@ Status values: `open`, `in-progress`, `fixed`, `deferred`, `wontfix`, `unverifie
 - **File:** `~/Library/LaunchAgents/com.internal.claude-usage-agent.plist` on the maintainer's Mac
 - **Problem:** It runs `/usr/bin/python3 <repo>/claude_usage_analyzer.py`, so half-finished edits sync every 30 minutes. During the v0.7.0 work one scheduled sync ran before the database migration and failed with HTTP 500.
 - **Fix direction:** Reinstall with `install/install.sh` so the agent runs the released binary from `~/.claude-usage-agent`.
+- **Fixed (2026-09-15):** unloaded during the v0.8.0 work and reinstalled from the v0.8.0 release as part of the fresh start.
+
+
+## Security audit (2026-09-15, fixed in v0.8.0)
+
+| ID | Severity | Finding | Fix |
+|----|----------|---------|-----|
+| H1 | High | A shared token without a collector ID could write as any collector | Ingest rejects tokens without `collector_id`; `create_collector_token` dropped |
+| H2 | High | Re-enrollment took over another collector (KI-02) | Re-enroll needs the collector's active token |
+| H3 | High | Installer ran unverified binaries from `latest`, falling back to source from `main` | Pinned version, `SHA256SUMS` checked before running, source fallback opt-in and pinned |
+| H4 | High | `config.json` with the collector token was world-readable | Agent dir `0700`, files `0600` via `mkstemp`, installer `umask 077` |
+| M1 | Medium | Statusline install loosened `settings.json` permissions and replaced symlinks | Keeps the file mode and edits the symlink target |
+| M2 | Medium | Secrets passed as command-line arguments | Token install path removed; secret only from environment or a hidden prompt |
+| M3 | Medium | No size, row or rate limits on ingest | 5 MB body, per-table row caps, 10 s between syncs, stored run fields whitelisted |
+| M4 | Medium | Enrollment secret guessing was unlimited | 10 failed attempts per IP per hour, IP from Cloudflare's header |
+| M5 | Medium | Wide table grants | No `anon` table access; clients write only `identity_aliases` |
+| M6 | Medium | Usernames in project paths, LAN address in FQDN, unsalted hashes | Project paths hashed, FQDN dropped, hashes salted per org |
+| M7 | Medium | Windows collector read and edited other users' WSL homes | Single-user distros only, WSL settings never edited |
+| M8 | Medium | Unpinned supabase-js, no CSP | Pinned with SRI; CSP, `frame-ancestors 'none'` |
+| L1–L3 | Low | Unscoped duplicate check, unlimited labels, database errors echoed | Scoped to the collector, text capped at 256, generic errors |
+| L4–L6 | Low | CSV formula injection, open sign-ups, login CSRF | Cell escaping, `shouldCreateUser: false`, PKCE |
+| L8–L15 | Low | Statusline file trust and quoting, temp files, token printed on enroll error, HTTP allowed, release workflow permissions, leftover paths in anomalies | All addressed; see the v0.8.0 commit |
+
+Verified live after deploy (2026-09-15):
+- unbound token: 403
+- re-enroll without the collector's token: 409; with its token: 200
+- revoked token: 403
+- second sync within 10 s: 429
+- negative token count: 400
+- over the row cap: 413
+- token used for another collector: 403
+- unknown column: ignored
+- 11th wrong secret from one IP: 429
+
+Still open:
+- Dashboard sign-ups must also be turned off in Supabase Auth settings (not reachable from the repo).
+- The statusline samples file keeps the full statusline input locally (private to the user).
+- Bodies over about 5 MB never reach the function: Supabase's gateway holds them until its roughly 160 s timeout and returns 503, so the function's own 413 only covers declared sizes it receives. Nothing is processed or stored.
 
 ---
 

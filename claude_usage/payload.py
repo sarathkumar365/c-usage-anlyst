@@ -12,9 +12,9 @@ from claude_usage.discovery import SourceRecord
 from claude_usage.metrics import group_sum, token_breakdown
 from claude_usage.models import AccountSnapshot, ActivityDaily, DesktopSession, FeatureUsage, PlanUsageSample, RequestUsage, SessionSummary
 from claude_usage.paths import ClaudePaths
-from claude_usage.transcripts import version_key
+from claude_usage.transcripts import stats_cache_daily, version_key
 from claude_usage.ui import friendly_tool_name, short_project_name
-from claude_usage.util import date_key, stable_hash
+from claude_usage.util import date_key, private_hash, stable_hash
 
 
 def build_sync_payload(
@@ -39,8 +39,14 @@ def build_sync_payload(
     feature_usage: list[FeatureUsage] | None = None,
     plan_usage: list[PlanUsageSample] | None = None,
     desktop_sessions: list[DesktopSession] | None = None,
+    include_stats_history: bool = False,
 ) -> dict[str, Any]:
     duplicate_records = sum(max(0, r.duplicate_records - 1) for r in requests)
+    salt = config.get("org_id", "")
+
+    def project_key(project: str) -> str:
+        # The full project path contains the OS username; only its readable last part and a salted hash leave the machine.
+        return private_hash(project, salt)[:24]
 
     daily_rows = []
     daily_buckets: dict[tuple[str, str, str], list[RequestUsage]] = defaultdict(list)
@@ -51,7 +57,7 @@ def build_sync_payload(
             "day": day,
             "surface": rows[0].surface,
             "confidence": "exact",
-            "project": project,
+            "project": project_key(project),
             "project_name": short_project_name(project),
             "model": model,
             "requests": len(rows),
@@ -61,6 +67,23 @@ def build_sync_payload(
         })
 
     desktop_by_id = {d.cli_session_id: d for d in desktop_sessions or []}
+    if include_stats_history:
+        oldest_transcript_day = min((date_key(r.timestamp) for r in requests), default=None)
+        for day, model, tokens in stats_cache_daily(stats, oldest_transcript_day):
+            daily_rows.append({
+                "day": day,
+                "surface": "claude_code",
+                "confidence": "stats_cache",
+                "project": project_key("stats-cache"),
+                "project_name": "Before transcripts",
+                "model": model,
+                "requests": 0,
+                "finalized_requests": 0,
+                "incomplete_requests": 0,
+                **{key: 0 for key in token_breakdown([])},
+                "reported_total": tokens,
+            })
+
     session_rows = []
     for s in sorted(sessions.values(), key=lambda x: x.reported_total, reverse=True):
         desktop = None if s.is_subagent else desktop_by_id.get(s.session_id)
@@ -68,7 +91,7 @@ def build_sync_payload(
             "session_id": s.session_id,
             "surface": s.surface,
             "confidence": "exact",
-            "project": s.project,
+            "project": project_key(s.project),
             "project_name": short_project_name(s.project),
             "is_subagent": s.is_subagent,
             "agent_id": s.agent_id,
@@ -109,7 +132,7 @@ def build_sync_payload(
     drivers = {
         "top_projects": [
             {
-                "project": project,
+                "project": project_key(project),
                 "project_name": short_project_name(project),
                 "tokens": tokens,
                 "share": tokens / total if total else 0.0,
@@ -149,8 +172,8 @@ def build_sync_payload(
         "org_id": config.get("org_id", ""),
         "identity": identity,
         "claude": {
-            "config_dir_hash": stable_hash(str(claude.claude_dir)),
-            "projects_dir_hash": stable_hash(str(claude.projects_dir)),
+            "config_dir_hash": private_hash(str(claude.claude_dir), salt),
+            "projects_dir_hash": private_hash(str(claude.projects_dir), salt),
             "stats_cache_present": stats_cache_present,
             "stats_cache_last_computed_date": stats.get("lastComputedDate") if stats else None,
             "config_source": claude.source,
@@ -191,5 +214,6 @@ def build_sync_payload(
         "activity_digest": stable_hash(payload_core["activity_daily"]),
         "account_digest": stable_hash([payload_core["accounts"], payload_core["install"], payload_core["feature_usage"]]),
         "plan_usage_digest": stable_hash(payload_core["plan_usage"]),
+        "history_digest": stable_hash([row for row in daily_rows if row["confidence"] == "stats_cache"]),
     })
     return payload_core

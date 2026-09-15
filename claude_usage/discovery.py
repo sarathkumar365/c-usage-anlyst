@@ -89,9 +89,10 @@ def structural_name_matches(path: Path) -> bool:
 
 def safe_metadata_file_matches(path: Path) -> bool:
     name = path.name.lower()
-    return name in SAFE_METADATA_NAMES or (
-        name_matches(path) and path.suffix.lower() in SAFE_METADATA_SUFFIXES
-    )
+    if name in SAFE_METADATA_NAMES:
+        # settings.json, Preferences and history.jsonl exist in many apps; only count them inside a Claude folder.
+        return any(name_matches(parent) for parent in path.parents)
+    return name_matches(path) and path.suffix.lower() in SAFE_METADATA_SUFFIXES
 
 
 def normalize_candidate(path: Path, claude_dir: Path) -> Path:

@@ -1,5 +1,5 @@
 // Ingest flow: authenticate token -> parse + validate payload -> skip duplicates -> write rows -> record run.
-import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.116.0";
 
 type Row = Record<string, unknown>;
 
@@ -41,6 +41,8 @@ type UsagePayload = {
 type TableSpec = {
   table: string;
   rows: (payload: UsagePayload) => Row[] | undefined;
+  // Upper bound on rows per sync; a legitimate collector stays far below it.
+  maxRows: number;
   columns: string[];
   // Payload columns that, with the identity columns, form the primary key.
   key: string[];
@@ -56,6 +58,7 @@ const TOKEN_COLUMNS = [
 const TABLES: TableSpec[] = [
   {
     table: "usage_daily",
+    maxRows: 20000,
     rows: (p) => p.daily,
     columns: ["day", "surface", "confidence", "project", "project_name", "model", "requests", "finalized_requests",
       "incomplete_requests", ...TOKEN_COLUMNS, "web_search_requests", "web_fetch_requests"],
@@ -65,6 +68,7 @@ const TABLES: TableSpec[] = [
   },
   {
     table: "usage_sessions",
+    maxRows: 10000,
     rows: (p) => p.sessions,
     columns: ["session_id", "surface", "confidence", "project", "project_name", "is_subagent", "agent_id", "first_ts",
       "last_ts", "duration_seconds", "tokens_per_hour", "requests", "finalized_requests", "incomplete_requests", "models",
@@ -76,6 +80,7 @@ const TABLES: TableSpec[] = [
   },
   {
     table: "usage_sources",
+    maxRows: 2000,
     rows: (p) => p.sources,
     columns: ["source_id", "surface", "status", "confidence", "path_hash", "file_count", "latest_activity_at", "extractor", "anomalies"],
     key: ["source_id"],
@@ -84,6 +89,7 @@ const TABLES: TableSpec[] = [
   },
   {
     table: "usage_activity_daily",
+    maxRows: 5000,
     rows: (p) => p.activity_daily,
     columns: ["day", "surface", "source_id", "sessions", "messages", "turns", "tool_calls", "reported_total", "confidence"],
     key: ["day", "surface", "source_id"],
@@ -92,6 +98,7 @@ const TABLES: TableSpec[] = [
   },
   {
     table: "usage_anomalies",
+    maxRows: 100,
     rows: (p) => p.anomalies,
     columns: ["code", "severity", "message"],
     key: ["code"],
@@ -100,6 +107,7 @@ const TABLES: TableSpec[] = [
   },
   {
     table: "claude_accounts",
+    maxRows: 20,
     rows: (p) => p.accounts,
     columns: ["account_uuid", "organization_uuid", "organization_name", "email_hash", "billing_type", "seat_tier",
       "user_rate_limit_tier", "organization_rate_limit_tier", "has_extra_usage", "source"],
@@ -109,6 +117,7 @@ const TABLES: TableSpec[] = [
   },
   {
     table: "collector_features",
+    maxRows: 1000,
     rows: (p) => p.feature_usage,
     columns: ["kind", "name", "count"],
     key: ["kind", "name"],
@@ -117,6 +126,7 @@ const TABLES: TableSpec[] = [
   },
   {
     table: "plan_usage_samples",
+    maxRows: 20000,
     rows: (p) => p.plan_usage,
     columns: ["organization_uuid", "source", "sampled_at", "five_hour_pct", "seven_day_pct", "extra_usage",
       "five_hour_resets_at", "seven_day_resets_at"],
@@ -131,7 +141,16 @@ type TokenRow = {
   machine_id: string | null;
   user_id: string | null;
   revoked_at: string | null;
+  last_used_at: string | null;
 };
+
+const MAX_BODY_BYTES = 5 * 1024 * 1024;
+const MIN_SECONDS_BETWEEN_SYNCS = 10;
+const MAX_TEXT_LENGTH = 256;
+const MAX_JSON_LENGTH = 20_000;
+const PERCENT_COLUMNS = new Set(["five_hour_pct", "seven_day_pct"]);
+// Only these run fields are kept; the rest of the payload already lives in the usage tables or is not needed.
+const STORED_RUN_FIELDS = ["schema_version", "collector_version", "summary", "drivers", "install", "anomalies", "period_start", "period_end"];
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -153,8 +172,12 @@ async function sha256Hex(value: string): Promise<string> {
     .join("");
 }
 
-function check(error: { message: string } | null) {
-  if (error) throw new HttpError(500, error.message);
+// Database errors stay in the function logs; callers only learn that the upload failed.
+function check(error: { message: string } | null, step = "write") {
+  if (error) {
+    console.error(`ingest ${step}:`, error.message);
+    throw new HttpError(500, "ingest failed");
+  }
 }
 
 async function authenticate(req: Request, supabase: SupabaseClient): Promise<{ tokenHash: string; tokenRow: TokenRow }> {
@@ -165,18 +188,24 @@ async function authenticate(req: Request, supabase: SupabaseClient): Promise<{ t
   const tokenHash = await sha256Hex(token);
   const { data: tokenRow, error } = await supabase
     .from("collector_tokens")
-    .select("org_id, collector_id, machine_id, user_id, revoked_at")
+    .select("org_id, collector_id, machine_id, user_id, revoked_at, last_used_at")
     .eq("token_hash", tokenHash)
     .maybeSingle();
-  check(error);
-  if (!tokenRow || tokenRow.revoked_at) throw new HttpError(403, "invalid collector token");
+  check(error, "token lookup");
+  // Tokens not bound to one collector could write as anyone, so only enrolled tokens are accepted.
+  if (!tokenRow || tokenRow.revoked_at || !tokenRow.collector_id) throw new HttpError(403, "invalid collector token");
+  if (tokenRow.last_used_at && Date.now() - new Date(tokenRow.last_used_at).getTime() < MIN_SECONDS_BETWEEN_SYNCS * 1000) {
+    throw new HttpError(429, "syncing too often");
+  }
   return { tokenHash, tokenRow };
 }
 
 async function parsePayload(req: Request, tokenRow: TokenRow): Promise<UsagePayload> {
+  const body = await req.text();
+  if (body.length > MAX_BODY_BYTES) throw new HttpError(413, "payload too large");
   let payload: UsagePayload;
   try {
-    payload = (await req.json()) as UsagePayload;
+    payload = JSON.parse(body) as UsagePayload;
   } catch {
     throw new HttpError(400, "invalid json");
   }
@@ -184,8 +213,8 @@ async function parsePayload(req: Request, tokenRow: TokenRow): Promise<UsagePayl
     throw new HttpError(400, "invalid payload identity");
   }
   // Every usage table keys on collector_id, so binding it to the token stops one
-  // token from overwriting another collector's rows. Legacy tokens have no collector_id.
-  if (tokenRow.collector_id && tokenRow.collector_id !== payload.identity.collector_id) {
+  // token from overwriting another collector's rows.
+  if (tokenRow.collector_id !== payload.identity.collector_id) {
     throw new HttpError(403, "token does not belong to this collector");
   }
   // Collectors before 0.6.1 re-derive machine_id from network names that change with the IP address,
@@ -194,20 +223,25 @@ async function parsePayload(req: Request, tokenRow: TokenRow): Promise<UsagePayl
     payload.identity.machine_id = tokenRow.machine_id;
     payload.identity.user_id = tokenRow.user_id;
   }
-  if (!payload.idempotency_key) throw new HttpError(400, "missing idempotency key");
+  if (typeof payload.idempotency_key !== "string" || !payload.idempotency_key || payload.idempotency_key.length > 128) {
+    throw new HttpError(400, "missing idempotency key");
+  }
+  for (const spec of TABLES) {
+    const rows = spec.rows(payload);
+    if (rows !== undefined && !Array.isArray(rows)) throw new HttpError(400, `invalid ${spec.table} rows`);
+    if (Array.isArray(rows) && rows.length > spec.maxRows) throw new HttpError(413, `too many ${spec.table} rows`);
+  }
   return payload;
 }
 
-async function markDuplicateSeen(supabase: SupabaseClient, payload: UsagePayload, tokenHash: string): Promise<boolean> {
-  const { data: existingRun } = await supabase
-    .from("collector_runs")
-    .select("idempotency_key")
-    .eq("idempotency_key", payload.idempotency_key)
-    .maybeSingle();
+async function markDuplicateSeen(supabase: SupabaseClient, orgId: string, payload: UsagePayload, tokenHash: string): Promise<boolean> {
+  // Scoped to this token's collector, so replaying another collector's key cannot make it look freshly synced.
+  const scope = (query: any) => query.eq("idempotency_key", payload.idempotency_key).eq("org_id", orgId).eq("collector_id", payload.identity.collector_id);
+  const { data: existingRun } = await scope(supabase.from("collector_runs").select("idempotency_key")).maybeSingle();
   if (!existingRun) return false;
   // Unchanged data still counts as a sync; the dashboard's last_sync_at reads received_at.
   const seenAt = new Date().toISOString();
-  await supabase.from("collector_runs").update({ received_at: seenAt }).eq("idempotency_key", payload.idempotency_key);
+  await scope(supabase.from("collector_runs").update({ received_at: seenAt }));
   await supabase.from("collector_tokens").update({ last_used_at: seenAt }).eq("token_hash", tokenHash);
   return true;
 }
@@ -218,26 +252,42 @@ async function writeUsage(supabase: SupabaseClient, orgId: string, payload: Usag
   check((await supabase.from("machines").upsert({
     org_id: orgId,
     machine_id: identity.machine_id,
-    hostname: identity.hostname,
-    fqdn: identity.fqdn,
-    platform: identity.platform || {},
+    hostname: cleanValue("hostname", identity.hostname),
+    fqdn: "",
+    platform: cleanValue("platform", identity.platform || {}),
     last_seen_at: now,
-  })).error);
+  })).error, "machines");
 
   check((await supabase.from("machine_users").upsert({
     org_id: orgId,
     user_id: identity.user_id,
     machine_id: identity.machine_id,
-    os_username: identity.os_username,
-    home_path_hash: identity.home_path_hash,
+    os_username: cleanValue("os_username", identity.os_username),
+    home_path_hash: cleanValue("home_path_hash", identity.home_path_hash),
     last_seen_at: now,
-  })).error);
+  })).error, "machine_users");
 
   for (const spec of TABLES) {
     const rows = spec.rows(payload);
     if (!Array.isArray(rows) || !rows.length) continue;
-    check((await supabase.from(spec.table).upsert(scopedRows(spec, rows, identity, orgId, now))).error);
+    check((await supabase.from(spec.table).upsert(scopedRows(spec, rows, identity, orgId, now))).error, spec.table);
   }
+}
+
+// Numbers must be finite and non-negative (percentages at most 100); text and JSON values are length-limited.
+function cleanValue(column: string, value: unknown): unknown {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value < 0 || (PERCENT_COLUMNS.has(column) && value > 100)) {
+      throw new HttpError(400, `invalid value for ${column}`);
+    }
+    return value;
+  }
+  if (typeof value === "string") return value.slice(0, MAX_TEXT_LENGTH);
+  if (value !== null && typeof value === "object") {
+    if (JSON.stringify(value).length > MAX_JSON_LENGTH) throw new HttpError(400, `value too large for ${column}`);
+    return value;
+  }
+  return value;
 }
 
 // Whitelisted columns plus server-owned identity, one row per primary key (a repeated key would fail the upsert).
@@ -245,7 +295,8 @@ function scopedRows(spec: TableSpec, rows: Row[], identity: UsagePayload["identi
   const byKey = new Map<string, Row>();
   for (const row of rows) {
     const clean: Row = {};
-    for (const column of spec.columns) if (column in row) clean[column] = row[column];
+    if (row === null || typeof row !== "object") throw new HttpError(400, `invalid ${spec.table} row`);
+    for (const column of spec.columns) if (column in row) clean[column] = cleanValue(column, row[column]);
     Object.assign(clean, {
       org_id: orgId,
       collector_id: identity.collector_id,
@@ -262,10 +313,11 @@ function scopedRows(spec: TableSpec, rows: Row[], identity: UsagePayload["identi
 async function recordRun(supabase: SupabaseClient, orgId: string, payload: UsagePayload, tokenHash: string, now: string) {
   // Recorded last: a run row marks the key as done, so a failed write above must stay retryable.
   // The bulky arrays already live in the usage tables and are not duplicated here.
-  const {
-    daily: _daily, sessions: _sessions, sources: _sources, activity_daily: _activity,
-    accounts: _accounts, feature_usage: _features, plan_usage: _planUsage, ...runPayload
-  } = payload;
+  const runPayload: Row = {};
+  for (const field of STORED_RUN_FIELDS) {
+    const value = (payload as unknown as Row)[field];
+    if (value !== undefined) runPayload[field] = cleanValue(field, value);
+  }
   const identity = payload.identity;
   const { error } = await supabase.from("collector_runs").insert({
     org_id: orgId,
@@ -274,14 +326,14 @@ async function recordRun(supabase: SupabaseClient, orgId: string, payload: Usage
     machine_id: identity.machine_id,
     user_id: identity.user_id,
     account_label: identity.account_label || "",
-    collector_version: payload.collector_version,
+    collector_version: cleanValue("collector_version", payload.collector_version),
     period_start: payload.period_start,
     period_end: payload.period_end,
-    transcript_digest: payload.transcript_digest,
-    summary: payload.summary || {},
+    transcript_digest: cleanValue("transcript_digest", payload.transcript_digest),
+    summary: cleanValue("summary", payload.summary || {}),
     payload: runPayload,
   });
-  if (error && error.code !== "23505") throw new HttpError(500, error.message);
+  if (error && error.code !== "23505") check(error, "collector_runs");
 
   await supabase.from("collector_tokens").update({ last_used_at: now }).eq("token_hash", tokenHash);
 }
@@ -292,9 +344,10 @@ async function handle(req: Request): Promise<Response> {
   if (!supabaseUrl || !serviceRoleKey) throw new HttpError(500, "server is not configured");
   const supabase = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false } });
 
+  if (Number(req.headers.get("content-length") || 0) > MAX_BODY_BYTES) throw new HttpError(413, "payload too large");
   const { tokenHash, tokenRow } = await authenticate(req, supabase);
   const payload = await parsePayload(req, tokenRow);
-  if (await markDuplicateSeen(supabase, payload, tokenHash)) {
+  if (await markDuplicateSeen(supabase, tokenRow.org_id, payload, tokenHash)) {
     return Response.json({ ok: true, duplicate: true }, { headers: corsHeaders });
   }
 
@@ -321,7 +374,10 @@ Deno.serve(async (req) => {
   try {
     return await handle(req);
   } catch (err) {
+    // An unread upload keeps the runtime waiting for it until it times out, so rejected requests cancel theirs.
+    if (!req.bodyUsed) await req.body?.cancel().catch(() => {});
     if (err instanceof HttpError) return new Response(err.message, { status: err.status, headers: corsHeaders });
-    throw err;
+    console.error("ingest unexpected:", err);
+    return new Response("ingest failed", { status: 500, headers: corsHeaders });
   }
 });

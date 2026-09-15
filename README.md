@@ -39,7 +39,7 @@ Every piece of work belongs to one flow. Each flow is one module that receives a
 |---|---|---|---|
 | Discover | `claude_usage/flows/discover.py` → `discovery.py` | – | `state.json` (`discovery`) |
 | Collect | `claude_usage/flows/collect.py` → `transcripts.py` | – | nothing |
-| Enroll / register | `claude_usage/flows/enroll.py` | `supabase/functions/enroll` | `config.json`, `collector_tokens` |
+| Enroll | `claude_usage/flows/enroll.py` | `supabase/functions/enroll` | `config.json`, `collector_tokens`, `enrollment_attempts` |
 | Sync | `claude_usage/flows/sync.py` → `accounts.py`, `plan_usage.py`, `desktop_sessions.py`, `activity.py`, `anomalies.py`, `payload.py` | `supabase/functions/ingest` | `state.json`, usage, account and plan usage tables |
 | Statusline capture | `claude_usage/flows/statusline.py` | – | Claude `settings.json` (`statusLine`), agent `config.json`, `plan-samples.jsonl` |
 | Preflight / status | `claude_usage/flows/preflight.py`, `status.py` | – | `state.json` (via discover) |
@@ -81,7 +81,7 @@ python3 claude_usage_analyzer.py --sources
 
 ## Collector Setup
 
-Create a Supabase project, apply `supabase/schema.sql`, deploy `supabase/functions/ingest`, then create an organization and collector token.
+Create a Supabase project, apply `supabase/schema.sql`, and deploy `supabase/functions/enroll` and `supabase/functions/ingest` (both with JWT verification off; they authenticate with the enrollment secret and collector tokens).
 
 Current configured Supabase project:
 
@@ -94,80 +94,72 @@ Ingest  : https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/ingest
 Dashboard: https://claude-usage-dashboard.netlify.app
 ```
 
-Example SQL for first setup:
+First setup:
 
 ```sql
 insert into organizations(id, name)
 values ('team-main', 'Team Main')
 on conflict (id) do nothing;
-
-select create_collector_token(
-  'team-main',
-  'default install token',
-  'replace-with-a-long-random-token'
-);
 ```
 
-For the dashboard user, add their Supabase Auth user id:
+Dashboard sign-in is invite-only: turn off "Allow new users to sign up" in Supabase Auth, invite each person from the Supabase Auth dashboard, then add them to the organization:
 
 ```sql
-insert into org_members(org_id, user_id, role)
-values ('team-main', '00000000-0000-0000-0000-000000000000', 'admin');
+insert into org_members(org_id, user_id, role, can_view_history)
+values ('team-main', '00000000-0000-0000-0000-000000000000', 'admin', true);
 ```
 
 ## Install
 
-Enrollment requires a shared secret. Only its SHA-256 hash is stored, in the `enrollment_secrets` table (RLS on, no client access):
+Enrollment requires a shared secret. Only its SHA-256 hash is stored, in the `enrollment_secrets` table (RLS on, no client access). Use at least 32 random bytes:
 
 ```sql
 insert into enrollment_secrets(secret_hash, org_id, label)
-values (encode(digest('<secret>', 'sha256'), 'hex'), 'team-main', 'install secret');
+values (encode(extensions.digest('<secret>', 'sha256'), 'hex'), 'team-main', 'install secret');
 ```
 
-Give the secret to installers out of band. It is sent only during enrollment and is not stored on the machine. Rotate by inserting a new row and setting `revoked_at` on the old one.
+Give the secret to installers out of band. The installer asks for it with hidden input, so it never lands in shell history or the process list, and it is not stored on the machine. Rotate by inserting a new row and setting `revoked_at` on the old one. Enrollment allows 10 failed attempts per IP per hour.
 
 macOS/Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/main/install/install.sh | ENROLLMENT_SECRET='<secret>' sh
+curl --proto '=https' -fsSL https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/v0.8.0/install/install.sh -o /tmp/claude-usage-install.sh && sh /tmp/claude-usage-install.sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-$env:ENROLLMENT_SECRET = '<secret>'
-irm https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/main/install/install.ps1 | iex
+irm https://raw.githubusercontent.com/sarathkumar365/c-usage-anlyst/v0.8.0/install/install.ps1 | iex
 ```
 
-The installer runs a preflight system check, downloads the native agent binary for the user's OS/CPU when a GitHub Release asset is available, enrolls the machine, stores user-level config, installs the usage % statusline capture, schedules a sync every 30 minutes, and runs one immediate sync. The capture keeps any statusline the member already has (it runs it after recording) and backs up `settings.json`; set `SKIP_STATUSLINE=1` to skip it, or run `--uninstall-statusline` later to restore the original. If release binaries are unavailable, it downloads the source archive and runs it with Python 3.8+. If you need the old explicit-token install path, set `COLLECTOR_TOKEN` before running the installer.
+The installer:
 
-Release binaries are built by GitHub Actions when a version tag is pushed:
+1. Checks the system, then downloads the agent binary for the pinned release and verifies it against that release's `SHA256SUMS` before running it. It stops if the checksum does not match. Running the tag's Python source instead is opt-in with `ALLOW_SOURCE_FALLBACK=1`.
+2. Enrolls the machine. Re-running it re-enrolls with the machine's current token; a collector ID that is already enrolled cannot be claimed without that token.
+3. Installs the usage % statusline capture (keeps any statusline the member already has and backs up `settings.json`; `SKIP_STATUSLINE=1` skips it, `--uninstall-statusline` removes it).
+4. Syncs all available history once: transcripts, plus older days from Claude Code's stats cache.
+5. Schedules a sync every 30 minutes that resends the last `SYNC_DAYS` (default 30) days.
 
-```bash
-git tag v0.4.3
-git push github v0.4.3
-```
+Agent files (`config.json` with the collector token, state, logs) are readable only by the installing user.
+
+Release binaries are built by GitHub Actions when a version tag matching `APP_VERSION` is pushed. The release gets `SHA256SUMS`, and a tag cannot overwrite binaries that were already published. Bump `AGENT_VERSION` in both installers and the install URLs above with each release.
 
 ## Manual Collector Commands
 
 ```bash
-python3 claude_usage_analyzer.py --register \
-  --ingest-url "https://YOUR_PROJECT.supabase.co/functions/v1/ingest" \
-  --collector-token "replace-with-a-long-random-token" \
-  --org-id "team-main" \
-  --account-label "shared-claude-account"
-
 python3 claude_usage_analyzer.py --status
-python3 claude_usage_analyzer.py --sync --days 90
-python3 claude_usage_analyzer.py --sync --dry-run --days 90
-python3 claude_usage_analyzer.py --sync --surface desktop --days 90
+python3 claude_usage_analyzer.py --enroll          # reads ENROLLMENT_SECRET from the environment
+python3 claude_usage_analyzer.py --sync            # all history
+python3 claude_usage_analyzer.py --sync --days 30
+python3 claude_usage_analyzer.py --sync --dry-run --days 30
+python3 claude_usage_analyzer.py --sync --surface desktop --days 30
 python3 claude_usage_analyzer.py --install-statusline
 python3 claude_usage_analyzer.py --uninstall-statusline
 ```
 
 ## Dashboard
 
-Host `dashboard/index.html` on any static host, including Cloudflare Pages, Vercel, Netlify, or Supabase Storage.
+Host `dashboard/index.html` on any static host. On Netlify, `netlify.toml` adds a Content Security Policy and other security headers; supabase-js is pinned with Subresource Integrity.
 
 The dashboard opens on three views of the same question, who is using the most and why:
 
@@ -179,16 +171,14 @@ The Brief also shows the shared account: its latest 5-hour and 7-day usage %, a 
 
 Data pages (People, Projects & models, Sessions, Collectors) and a person panel sit alongside. "Why" reasons are derived in the page from session length, subagent share, context reuse, model mix, and top tools (`dashboard_person_tools`). Collectors come from each identity's latest sync (`dashboard_collectors`), so a machine that syncs but finds no Claude data still appears. All views are paged, so none is capped at PostgREST's row limit.
 
-The dashboard asks for:
+### Who sees what
 
-- Supabase URL
-- Supabase publishable/anon key
-- Org ID
-- email for Supabase magic-link login
+- Every organization member sees the last 30 days (7d and 30d ranges).
+- Members with the history permission (`org_members.can_view_history`) also see older data (90d and All). This is enforced by row level security on every collected-data table, not just hidden in the page.
+- Admins (`role` admin or owner) manage the history permission in Collectors → Dashboard access.
+- Sign-in uses a magic link with PKCE, so open the link in the same browser that requested it.
 
-`dashboard/index.html` is prefilled for the `c-usage-anlyst` Supabase project.
-
-## Privacy Defaults
+## Privacy Defaults## Privacy Defaults
 
 The collector uploads metrics only:
 
@@ -202,5 +192,7 @@ The collector uploads metrics only:
 - Claude account and organization IDs, plan tier, and a hash of the login email
 - the account's usage percentages
 - git branch names, Claude Code version and install method, skill and plugin usage counts
+
+Project paths, which contain the OS username, are sent only as a salted hash plus their last two folder names. The machine's network name (FQDN) is not sent, and home-path and email hashes are salted per organization.
 
 It does not upload prompts, responses, raw transcript text, session titles, login emails, raw discovered paths, source file contents, Claude credentials, or API keys.

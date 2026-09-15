@@ -1,8 +1,8 @@
-APP_VERSION = "0.7.2"
+APP_VERSION = "0.8.0"
 DEFAULT_SYNC_INTERVAL_MINUTES = 30
 DEFAULT_ENROLL_URL = "https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/enroll"
 DEFAULT_INGEST_URL = "https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/ingest"
-DEFAULT_SYNC_DAYS = 90
+DEFAULT_SYNC_DAYS = 30
 # A gap between requests longer than this ends an active span (a resumed session does not count the time away).
 SESSION_IDLE_GAP_SECONDS = 30 * 60
 

@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import json
 import platform
+import shlex
 import shutil
+import stat
+from pathlib import Path
 from typing import Any
 
 from claude_usage.paths import (
@@ -21,10 +24,11 @@ from claude_usage.paths import (
 )
 from claude_usage.store import load_config, save_config
 from claude_usage.ui import c
-from claude_usage.util import read_json_file, write_json_file
+from claude_usage.util import ensure_private_dir, read_json_file, write_json_file, write_private_text
 
 SH_SCRIPT = """#!/bin/sh
 # Claude Usage Agent: record the account's rate-limit percentages, then run the previous statusline.
+umask 077
 input=$(cat)
 case "$input" in
   *rate_limits*)
@@ -56,14 +60,28 @@ if ($Chain -and (Test-Path $Chain)) {
 
 
 def _command(claude_dir) -> str:
-    script, samples, chain = statusline_script_path(), statusline_samples_path(), statusline_chain_path(claude_dir)
+    paths = [str(statusline_script_path()), str(statusline_samples_path()), str(statusline_chain_path(claude_dir))]
     if platform.system() == "Windows":
+        if any('"' in path for path in paths):
+            raise RuntimeError("The agent directory path contains a double quote; statusline capture not installed.")
+        script, samples, chain = paths
         return f'powershell -NoProfile -ExecutionPolicy Bypass -File "{script}" "{samples}" "{chain}"'
-    return f'sh "{script}" "{samples}" "{chain}"'
+    return "sh " + " ".join(shlex.quote(path) for path in paths)
 
 
 def _is_ours(statusline: Any) -> bool:
     return isinstance(statusline, dict) and str(statusline_script_path()) in str(statusline.get("command", ""))
+
+
+def _write_settings(path: Path, settings: dict[str, Any]):
+    # Edit the real file behind a dotfile-manager symlink, and keep its permissions (settings can hold secrets).
+    target = path.resolve() if path.is_symlink() else path
+    mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o600
+    write_json_file(target, settings, sort_keys=False, mode=mode)
+
+
+def _is_wsl(claude_dir: Path) -> bool:
+    return str(claude_dir).startswith("\\\\")
 
 
 def _load_settings(path) -> dict[str, Any] | None:
@@ -87,13 +105,16 @@ def install_statusline(claude: ClaudePaths) -> int:
         return 0
 
     script = statusline_script_path()
-    script.parent.mkdir(parents=True, exist_ok=True)
-    script.write_text(PS1_SCRIPT if script.suffix == ".ps1" else SH_SCRIPT, encoding="utf-8")
+    ensure_private_dir(script.parent)
+    write_private_text(script, PS1_SCRIPT if script.suffix == ".ps1" else SH_SCRIPT)
 
     config = load_config()
     chained = dict(config.get("chained_statusline") or {})
     for claude_dir in dirs:
         settings_path = claude_dir / "settings.json"
+        if _is_wsl(claude_dir):
+            # A Windows command would break the statusline inside WSL.
+            continue
         settings = _load_settings(settings_path)
         if settings is None:
             print(c(f"Skipped {settings_path}: not valid JSON.", "yellow"))
@@ -107,8 +128,8 @@ def install_statusline(claude: ClaudePaths) -> int:
             chained[str(claude_dir)] = current
             previous = current.get("command") if isinstance(current, dict) and current.get("type") == "command" else ""
             chain = statusline_chain_path(claude_dir)
-            chain.parent.mkdir(parents=True, exist_ok=True)
-            chain.write_text(str(previous or ""), encoding="utf-8")
+            ensure_private_dir(chain.parent)
+            write_private_text(chain, str(previous or ""))
             backup = settings_path.with_name("settings.json.claude-usage.bak")
             if settings_path.exists() and not backup.exists():
                 shutil.copy2(settings_path, backup)
@@ -116,7 +137,7 @@ def install_statusline(claude: ClaudePaths) -> int:
         if isinstance(current, dict) and "padding" in current:
             statusline["padding"] = current["padding"]
         settings["statusLine"] = statusline
-        write_json_file(settings_path, settings, sort_keys=False)
+        _write_settings(settings_path, settings)
         print(c(f"Usage % capture installed in {settings_path}", "green"))
     save_config({**config, "chained_statusline": chained})
     return 0
@@ -135,7 +156,7 @@ def uninstall_statusline(claude: ClaudePaths) -> int:
             settings["statusLine"] = previous
         else:
             settings.pop("statusLine", None)
-        write_json_file(settings_path, settings, sort_keys=False)
+        _write_settings(settings_path, settings)
         statusline_chain_path(claude_dir).unlink(missing_ok=True)
         print(c(f"Usage % capture removed from {settings_path}", "green"))
     save_config({**config, "chained_statusline": chained})

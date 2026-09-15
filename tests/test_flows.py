@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -240,6 +241,84 @@ class StatuslineTests(FixtureCase):
         self.assertEqual((self.home / ".claude" / "settings.json").read_text(), "{not json")
 
 
+class PrivacyAndHardeningTests(FixtureCase):
+    def test_payload_has_no_home_paths_and_hashes_projects(self):
+        payload = PayloadTests.build(self, UsageQuery(), datetime.now(timezone.utc))
+        encoded = json.dumps(payload)
+        self.assertNotIn("/Users/test", encoded)
+        row = next(s for s in payload["sessions"] if s["session_id"] == fixture_home.SESSION_ID)
+        self.assertEqual(len(row["project"]), 24)
+        self.assertEqual(row["project_name"], "work/demo")
+
+    def test_stats_cache_history_only_before_transcripts_and_only_on_full_sync(self):
+        full = PayloadTests.build(self, UsageQuery(), datetime.now(timezone.utc), include_stats_history=True)
+        history = [r for r in full["daily"] if r["confidence"] == "stats_cache"]
+        self.assertEqual([(r["day"], r["model"], r["reported_total"]) for r in history], [("2026-08-01", "claude-opus-5", 1234)])
+        windowed = PayloadTests.build(self, UsageQuery(days=30), datetime.now(timezone.utc))
+        self.assertFalse([r for r in windowed["daily"] if r["confidence"] == "stats_cache"])
+
+    def test_anomaly_messages_lose_every_path(self):
+        from claude_usage.anomalies import sanitize_sync_anomalies
+        clean = sanitize_sync_anomalies([{"code": "x", "message": "Missing C:\\Users\\bob\\.claude and /home/bob/.config/claude."}], self.claude)
+        self.assertEqual(clean[0]["message"], "Missing <path> and <path>.")
+
+    def test_statusline_command_quotes_hostile_paths_and_keeps_settings_mode(self):
+        hostile = self.root / "agent $(touch pwned) 'x'"
+        with mock.patch.dict(os.environ, {"CLAUDE_USAGE_AGENT_DIR": str(hostile)}):
+            real = self.root / "dotfiles" / "settings.json"
+            real.parent.mkdir()
+            real.write_text(json.dumps({"statusLine": {"type": "command", "command": "echo mine"}}))
+            os.chmod(real, 0o640)
+            link = self.home / ".claude" / "settings.json"
+            link.unlink()
+            link.symlink_to(real)
+            statusline_flow.install_statusline(self.claude)
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(stat.S_IMODE(real.stat().st_mode), 0o640)
+            command = json.loads(real.read_text())["statusLine"]["command"]
+            proc = subprocess.run(command, shell=True, input='{"rate_limits":{"five_hour":{"used_percentage":1}}}', capture_output=True, text=True, cwd=str(self.root))
+            self.assertEqual(proc.stdout.strip(), "mine")
+            self.assertFalse((self.root / "pwned").exists())
+            samples = hostile / "plan-samples.jsonl"
+            self.assertTrue(samples.exists())
+            self.assertEqual(stat.S_IMODE(samples.stat().st_mode), 0o600)
+
+
+class KnownIssueTests(unittest.TestCase):
+    def test_generic_settings_files_outside_claude_folders_are_ignored(self):
+        from claude_usage.discovery import discover_claude_sources
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / "Library" / "Application Support" / "SomeEditor").mkdir(parents=True)
+            (home / "Library" / "Application Support" / "SomeEditor" / "settings.json").write_text("{}")
+            (home / "Library" / "Application Support" / "Claude").mkdir(parents=True)
+            (home / "Library" / "Application Support" / "Claude" / "settings.json").write_text("{}")
+            sources, _ = discover_claude_sources(home / ".claude", system="Darwin", home=home, full=True)
+            paths = [s.path for s in sources]
+            self.assertFalse(any("SomeEditor" in p for p in paths))
+            self.assertTrue(any(p.endswith("Claude/settings.json") for p in paths))
+
+    def test_activity_counts_files_per_day_and_is_stable(self):
+        from claude_usage.activity import extract_activity_daily
+        from claude_usage.discovery import SourceRecord
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name, ts in (("a", 1_787_000_000), ("b", 1_787_000_100), ("c", 1_787_300_000)):
+                (root / name).write_text("x")
+                os.utime(root / name, (ts, ts))
+            source = SourceRecord("sid", "desktop_chat", str(root), "h", "present", "derived", 3, None, "claude_desktop_chat")
+            first = [(r.day, r.messages) for r in extract_activity_daily([source])]
+            self.assertEqual(sorted(n for _, n in first), [1, 2])
+            self.assertEqual(first, [(r.day, r.messages) for r in extract_activity_daily([source])])
+
+
+class ReleasePinTests(unittest.TestCase):
+    def test_installers_pin_the_collector_version(self):
+        from claude_usage.constants import APP_VERSION
+        self.assertIn(f'AGENT_VERSION="${{AGENT_VERSION:-v{APP_VERSION}}}"', (REPO / "install" / "install.sh").read_text())
+        self.assertIn(f'else {{ "v{APP_VERSION}" }}', (REPO / "install" / "install.ps1").read_text())
+
+
 class PathTests(unittest.TestCase):
     def test_precedence_is_argument_config_env_default(self):
         with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": "/env"}):
@@ -266,11 +345,11 @@ class CliTests(FixtureCase):
         self.assertNotIn(str(self.home), proc.stdout)
         self.assertTrue((self.root / "agent" / "state.json").exists())
 
-    def test_sync_without_registration_records_error(self):
+    def test_sync_without_enrollment_records_error(self):
         proc = self.cli("--sync")
         self.assertEqual(proc.returncode, 2)
         state = json.loads((self.root / "agent" / "state.json").read_text())
-        self.assertIn("not registered", state["last_error"])
+        self.assertIn("not enrolled", state["last_error"])
 
     def test_help_renders(self):
         proc = self.cli("--help")
@@ -283,23 +362,63 @@ class CliTests(FixtureCase):
         self.assertIn("ENROLLMENT_SECRET", proc.stdout)
         self.assertNotIn("Traceback", proc.stderr)
 
-    def test_register_writes_config_and_report_runs(self):
-        proc = self.cli("--register", "--ingest-url", "https://example.invalid/i", "--collector-token", "tok")
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        config = json.loads((self.root / "agent" / "config.json").read_text())
+    def enroll(self, responses):
+        from claude_usage.flows import enroll as enroll_flow
+        calls = []
+
+        def fake_post(url, payload, headers=None, timeout=30):
+            calls.append((payload["identity"]["collector_id"], dict(headers or {})))
+            outcome = responses.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return {"status": 200, "response": outcome}
+
+        with mock.patch.object(enroll_flow, "post_json", fake_post):
+            enroll_flow.enroll(self.claude, enroll_url="https://example.invalid/enroll", enrollment_secret="s",
+                               org_id=None, account_label=None, collector_label=None, sync_interval_minutes=None)
+        return calls
+
+    def test_enroll_writes_private_config_and_report_runs(self):
+        self.enroll([{"collector_token": "tok", "ingest_url": "https://example.invalid/i"}])
+        config_file = self.root / "agent" / "config.json"
+        config = json.loads(config_file.read_text())
         self.assertEqual(config["claude_config_dir"], str(self.home / ".claude"))
+        self.assertTrue(config["machine_id"] and config["user_id"])
+        if os.name != "nt":
+            self.assertEqual(stat.S_IMODE(config_file.stat().st_mode), 0o600)
+            self.assertEqual(stat.S_IMODE(config_file.parent.stat().st_mode), 0o700)
         report = self.cli("--verbose")
         self.assertEqual(report.returncode, 0, report.stderr)
         self.assertIn("TOTAL REPORTED TOKEN VOLUME", report.stdout)
 
-    def test_stored_ids_survive_network_name_changes(self):
-        self.cli("--register", "--ingest-url", "https://example.invalid/i", "--collector-token", "tok")
+    def test_reenroll_sends_current_token_and_starts_new_collector_on_conflict(self):
+        from claude_usage.transport import HttpStatusError
+        self.enroll([{"collector_token": "tok1", "ingest_url": "https://example.invalid/i"}])
+        first = json.loads((self.root / "agent" / "config.json").read_text())["collector_id"]
+        calls = self.enroll([HttpStatusError(409, "collector already enrolled"), {"collector_token": "tok2", "ingest_url": "https://example.invalid/i"}])
+        self.assertEqual(calls[0], (first, {"X-Enrollment-Secret": "s", "Authorization": "Bearer tok1"}))
+        self.assertNotEqual(calls[1][0], first)
+        self.assertNotIn("Authorization", calls[1][1])
         config = json.loads((self.root / "agent" / "config.json").read_text())
-        self.assertTrue(config["machine_id"] and config["user_id"])
+        self.assertEqual((config["collector_id"], config["collector_token"]), (calls[1][0], "tok2"))
+
+    def test_secret_on_command_line_is_ignored(self):
+        proc = self.cli("--enroll", "--enrollment-secret", "visible-in-ps")
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("ignored", proc.stdout)
+
+    def test_stored_ids_survive_network_name_changes(self):
+        self.enroll([{"collector_token": "tok", "ingest_url": "https://example.invalid/i"}])
+        config = json.loads((self.root / "agent" / "config.json").read_text())
         with mock.patch("socket.gethostname", return_value="Mac"), mock.patch("socket.getfqdn", return_value="38.2.168.192.in-addr.arpa"):
             from claude_usage.identity import collect_identity
             identity = collect_identity(config)
         self.assertEqual((identity["machine_id"], identity["user_id"]), (config["machine_id"], config["user_id"]))
+
+    def test_credentials_are_never_sent_over_http(self):
+        from claude_usage.transport import post_json
+        with self.assertRaises(RuntimeError):
+            post_json("http://example.com/ingest", {}, headers={"Authorization": "Bearer x"})
 
 
 if __name__ == "__main__":

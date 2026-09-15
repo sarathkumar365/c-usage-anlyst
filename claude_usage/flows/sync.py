@@ -22,14 +22,14 @@ from claude_usage.store import load_config, load_state, redact_config, save_conf
 from claude_usage.transcripts import transcript_digest
 from claude_usage.transport import post_json
 from claude_usage.ui import c
-from claude_usage.util import parse_ts
+from claude_usage.util import parse_ts, write_private_text
 
 
 def upload_payload(payload: dict[str, Any], config: dict[str, Any], timeout: int = 30) -> dict[str, Any]:
     ingest_url = config.get("ingest_url")
     token = config.get("collector_token")
     if not ingest_url or not token:
-        raise RuntimeError("Collector is not registered. Run --register with --ingest-url and --collector-token first.")
+        raise RuntimeError("Collector is not enrolled. Run the installer, or --enroll with ENROLLMENT_SECRET set.")
     return post_json(
         ingest_url,
         headers={
@@ -59,7 +59,7 @@ def build_payload(claude: ClaudePaths, query: UsageQuery) -> tuple[dict[str, Any
 
     claude_dirs = claude_config_dirs(claude)
     desktop_dirs = desktop_data_dirs()
-    accounts = read_accounts(claude_dirs, desktop_dirs)
+    accounts = read_accounts(claude_dirs, desktop_dirs, salt=config.get("org_id") or "")
     cursor = state.get("plan_usage_cursor") if isinstance(state.get("plan_usage_cursor"), dict) else {}
     desktop_samples, unknown_versions = read_desktop_samples(desktop_dirs, since=parse_ts(cursor.get("desktop")))
     statusline_samples = read_statusline_samples(
@@ -93,6 +93,8 @@ def build_payload(claude: ClaudePaths, query: UsageQuery) -> tuple[dict[str, Any
         feature_usage=read_feature_usage(claude_dirs),
         plan_usage=desktop_samples + statusline_samples,
         desktop_sessions=desktop_sessions,
+        # Only an all-history sync may add stats-cache days; a shorter window would overlap days sent before.
+        include_stats_history=query.days is None,
     )
     payload["summary"]["discovery_mode"] = "full" if discovery_was_full else "light"
     return payload, config
@@ -114,7 +116,7 @@ def _advance_plan_usage_cursor(payload: dict[str, Any]):
     try:
         lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
         keep = [line for line in lines if (sample := parse_statusline_line(line, "")) and parse_ts(sample.sampled_at) > uploaded_until]
-        path.write_text("".join(f"{line}\n" for line in keep), encoding="utf-8")
+        write_private_text(path, "".join(f"{line}\n" for line in keep))
     except OSError:
         pass
 

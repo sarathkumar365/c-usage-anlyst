@@ -175,9 +175,12 @@ def wsl_claude_dirs(system: str | None = None) -> list[Path]:
     dirs: list[Path] = []
     for distro in distros:
         try:
-            dirs.extend((Path(rf"\\wsl.localhost\{distro}") / "home").glob("*/.claude"))
+            homes = [h for h in (Path(rf"\\wsl.localhost\{distro}") / "home").iterdir() if h.is_dir()]
         except OSError:
             continue
+        # Only a distro with a single user can be assumed to belong to this Windows user.
+        if len(homes) == 1:
+            dirs.append(homes[0] / ".claude")
     return _unique_existing(dirs)
 
 

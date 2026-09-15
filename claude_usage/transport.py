@@ -5,10 +5,17 @@ from __future__ import annotations
 import json
 import ssl
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
 from claude_usage.constants import APP_VERSION
+
+
+class HttpStatusError(RuntimeError):
+    def __init__(self, status: int, detail: str):
+        super().__init__(f"Request failed with HTTP {status}: {detail}")
+        self.status = status
 
 
 def https_context() -> ssl.SSLContext | None:
@@ -18,7 +25,14 @@ def https_context() -> ssl.SSLContext | None:
     except Exception:
         return None
 
+def require_https(url: str):
+    # Bearer tokens and the enrollment secret must never travel in clear text.
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" and not (parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1")):
+        raise RuntimeError(f"Refusing to send credentials to a non-HTTPS URL: {parsed.scheme}://{parsed.hostname}")
+
 def post_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None = None, timeout: int = 30) -> dict[str, Any]:
+    require_https(url)
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url,
@@ -44,7 +58,7 @@ def post_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None 
             return {"status": response.status, "response": parsed}
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"Request failed with HTTP {exc.code}: {detail}") from exc
+        raise HttpStatusError(exc.code, detail) from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"Request failed: {exc.reason}") from exc
 

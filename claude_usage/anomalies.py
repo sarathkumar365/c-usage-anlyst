@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -94,6 +95,10 @@ def discover_anomalies(claude: ClaudePaths, paths: list[Path] | None = None) -> 
 
     return anomalies
 
+# Paths the named replacements missed (extra config dirs, WSL, exception text) still carry usernames.
+LEFTOVER_PATH = re.compile(r"(?:[A-Za-z]:[\\/]|\\\\|/(?:Users|home|root|mnt|private|var|tmp|Volumes|opt)/)[^\s\"'<>]*[^\s\"'<>.,;:]")
+
+
 def sanitize_sync_anomalies(anomalies: list[dict[str, str]], claude: ClaudePaths) -> list[dict[str, str]]:
     replacements = {
         str(claude.claude_dir): "<claude_config_dir>",
@@ -107,6 +112,7 @@ def sanitize_sync_anomalies(anomalies: list[dict[str, str]], claude: ClaudePaths
         for raw, label in replacements.items():
             if raw:
                 message = message.replace(raw, label)
+        message = LEFTOVER_PATH.sub("<path>", message)
         sanitized.append({
             "code": anomaly.get("code", "unknown"),
             "severity": anomaly.get("severity", "warn"),

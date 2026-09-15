@@ -1,16 +1,23 @@
 #!/usr/bin/env sh
 # Installs the Claude usage agent for the current user.
-# Phases: check_system -> install_runtime -> preflight -> enroll_agent -> install_statusline -> install_scheduler -> first_sync
+# Phases: check_system -> install_runtime -> preflight -> enroll_agent -> install_statusline -> first_sync -> install_scheduler
 set -eu
+# Everything the installer writes (token config, logs, binary) is private to this user.
+umask 077
 
+# Pinned to the release this installer belongs to; the binary is verified against that release's SHA256SUMS.
+AGENT_VERSION="${AGENT_VERSION:-v0.8.0}"
 APP_DIR="${CLAUDE_USAGE_AGENT_DIR:-$HOME/.claude-usage-agent}"
 BIN_PATH="$APP_DIR/claude-usage-agent"
 SRC_DIR="$APP_DIR/src"
 LOG_DIR="$APP_DIR/logs"
 SYNC_INTERVAL_MINUTES="${SYNC_INTERVAL_MINUTES:-30}"
-SYNC_DAYS="${SYNC_DAYS:-90}"
-RELEASE_BASE_URL="${RELEASE_BASE_URL:-https://github.com/sarathkumar365/c-usage-anlyst/releases/latest/download}"
-SOURCE_ARCHIVE_URL="${SOURCE_ARCHIVE_URL:-https://codeload.github.com/sarathkumar365/c-usage-anlyst/tar.gz/refs/heads/main}"
+# Scheduled syncs resend this many days; the first sync after install sends all history.
+SYNC_DAYS="${SYNC_DAYS:-30}"
+RELEASE_BASE_URL="${RELEASE_BASE_URL:-https://github.com/sarathkumar365/c-usage-anlyst/releases/download/$AGENT_VERSION}"
+SOURCE_ARCHIVE_URL="${SOURCE_ARCHIVE_URL:-https://codeload.github.com/sarathkumar365/c-usage-anlyst/tar.gz/refs/tags/$AGENT_VERSION}"
+# Running unverified source is opt-in.
+ALLOW_SOURCE_FALLBACK="${ALLOW_SOURCE_FALLBACK:-}"
 INGEST_URL="${INGEST_URL:-https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/ingest}"
 ENROLL_URL="${ENROLL_URL:-https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/enroll}"
 ORG_ID="${ORG_ID:-team-main}"
@@ -46,8 +53,47 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || block "$1 is missing" "Install $1, then rerun the install command."
 }
 
+fetch() {
+  curl --proto '=https' --tlsv1.2 -fsSL "$@"
+}
+
 probe_url() {
-  curl -fsSL --max-time 12 -X "${2:-GET}" "$1" >/dev/null 2>&1
+  fetch --max-time 12 -X "${2:-GET}" "$1" >/dev/null 2>&1
+}
+
+sha256_of() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | cut -d ' ' -f 1
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d ' ' -f 1
+  else
+    block "No SHA-256 tool found" "Install shasum or sha256sum (coreutils), then rerun."
+  fi
+}
+
+# Single-quote a value for a shell command line (cron).
+shell_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+xml_escape() {
+  printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+read_enrollment_secret() {
+  if [ -n "${ENROLLMENT_SECRET:-}" ]; then
+    return
+  fi
+  # Prompt instead of taking the secret on the command line, where it would land in shell history.
+  if [ -r /dev/tty ]; then
+    printf 'Enrollment secret (input hidden): ' > /dev/tty
+    stty -echo < /dev/tty 2>/dev/null || true
+    IFS= read -r ENROLLMENT_SECRET < /dev/tty || ENROLLMENT_SECRET=""
+    stty echo < /dev/tty 2>/dev/null || true
+    printf '\n' > /dev/tty
+  fi
+  [ -n "${ENROLLMENT_SECRET:-}" ] || block "No enrollment secret provided" "Rerun the install command and enter the secret your admin gave you."
+  export ENROLLMENT_SECRET
 }
 
 run_agent() {
@@ -58,12 +104,12 @@ run_agent() {
   fi
 }
 
-# Space-joined command for schedulers that take a single command line.
+# Quoted command for schedulers that take a single command line.
 agent_command_line() {
   if [ "$RUNTIME_MODE" = "binary" ]; then
-    printf '%s' "$BIN_PATH"
+    shell_quote "$BIN_PATH"
   else
-    printf '%s %s' "$PYTHON_BIN" "$SRC_DIR/claude_usage_analyzer.py"
+    printf '%s %s' "$(shell_quote "$PYTHON_BIN")" "$(shell_quote "$SRC_DIR/claude_usage_analyzer.py")"
   fi
 }
 
@@ -87,7 +133,7 @@ check_system() {
   RELEASE_ASSET_URL="$RELEASE_BASE_URL/$ASSET_NAME"
   status "OK" "OS supported: $OS_NAME $ARCH_NAME"
 
-  mkdir -p "$APP_DIR" "$LOG_DIR" || block "Cannot create install directory: $APP_DIR" "Use a writable home directory."
+  mkdir -p "$APP_DIR" "$LOG_DIR" && chmod 700 "$APP_DIR" "$LOG_DIR" || block "Cannot create install directory: $APP_DIR" "Use a writable home directory."
   if (umask 077 && : > "$APP_DIR/.write-test") 2>/dev/null; then
     rm -f "$APP_DIR/.write-test"
     status "OK" "Install dir writable: $APP_DIR"
@@ -107,9 +153,7 @@ check_system() {
     block "Supabase enroll unreachable" "Check internet/VPN/firewall and rerun."
   fi
 
-  if [ -z "${COLLECTOR_TOKEN:-}" ] && [ -z "${ENROLLMENT_SECRET:-}" ]; then
-    block "ENROLLMENT_SECRET is not set" "Rerun as: curl -fsSL <install-url> | ENROLLMENT_SECRET=<secret> sh"
-  fi
+  read_enrollment_secret
 }
 
 install_python_source() {
@@ -119,7 +163,7 @@ install_python_source() {
   "$PYTHON_BIN" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' || block "Python 3.8+ is required for fallback, found $PYTHON_VERSION" "Install Python 3.8+ or wait for native release assets."
 
   tmp="$(mktemp -d)"
-  curl -fsSL "$SOURCE_ARCHIVE_URL" | tar -xzf - -C "$tmp" || block "Could not download agent source" "Check internet access and rerun."
+  fetch "$SOURCE_ARCHIVE_URL" | tar -xzf - -C "$tmp" || block "Could not download agent source" "Check internet access and rerun."
   extracted=""
   for dir in "$tmp"/*/; do
     [ -f "${dir}claude_usage_analyzer.py" ] && extracted="$dir"
@@ -136,14 +180,27 @@ install_python_source() {
 }
 
 install_runtime() {
-  if curl -fsSL --max-time 60 "$RELEASE_ASSET_URL" -o "$BIN_PATH"; then
-    chmod 700 "$BIN_PATH"
+  download="$(mktemp "$APP_DIR/.download.XXXXXX")"
+  sums="$(mktemp "$APP_DIR/.sums.XXXXXX")"
+  if fetch --max-time 120 "$RELEASE_ASSET_URL" -o "$download" && fetch --max-time 30 "$RELEASE_BASE_URL/SHA256SUMS" -o "$sums"; then
+    expected="$(awk -v name="$ASSET_NAME" '$2 == name || $2 == "*" name { print $1 }' "$sums")"
+    actual="$(sha256_of "$download")"
+    rm -f "$sums"
+    if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+      rm -f "$download"
+      block "Checksum mismatch for $ASSET_NAME ($AGENT_VERSION)" "Do not run this binary. Retry later or contact your admin."
+    fi
+    chmod 700 "$download"
+    mv -f "$download" "$BIN_PATH"
     RUNTIME_MODE="binary"
     PROBE_URL="$RELEASE_ASSET_URL"
-    status "OK" "Downloaded native agent: $ASSET_NAME"
+    status "OK" "Downloaded and verified native agent: $ASSET_NAME $AGENT_VERSION"
   else
-    rm -f "$BIN_PATH"
-    warn "Native release asset unavailable, trying Python fallback"
+    rm -f "$download" "$sums"
+    if [ -z "$ALLOW_SOURCE_FALLBACK" ]; then
+      block "Could not download the $AGENT_VERSION agent for $ASSET_NAME" "Check internet access and rerun, or set ALLOW_SOURCE_FALLBACK=1 to run the $AGENT_VERSION source with Python."
+    fi
+    warn "Native release asset unavailable, using the $AGENT_VERSION source with Python (ALLOW_SOURCE_FALLBACK)"
     install_python_source
   fi
 }
@@ -154,22 +211,20 @@ preflight() {
 }
 
 enroll_agent() {
-  set -- --org-id "$ORG_ID" --account-label "$ACCOUNT_LABEL" --collector-label "$COLLECTOR_LABEL" --claude-dir "$CLAUDE_DIR" --sync-interval-minutes "$SYNC_INTERVAL_MINUTES"
-  if [ -n "${COLLECTOR_TOKEN:-}" ]; then
-    run_agent --register --ingest-url "$INGEST_URL" --collector-token "$COLLECTOR_TOKEN" "$@"
-  else
-    run_agent --enroll --enroll-url "$ENROLL_URL" "$@"
-  fi
+  # The secret reaches the agent through the environment only, never as an argument visible in the process list.
+  run_agent --enroll --enroll-url "$ENROLL_URL" --org-id "$ORG_ID" --account-label "$ACCOUNT_LABEL" \
+    --collector-label "$COLLECTOR_LABEL" --claude-dir "$CLAUDE_DIR" --sync-interval-minutes "$SYNC_INTERVAL_MINUTES" \
+    || block "Enrollment failed" "Check the enrollment secret and rerun."
 }
 
 install_launchagent() {
   plist="$HOME/Library/LaunchAgents/com.internal.claude-usage-agent.plist"
   mkdir -p "$HOME/Library/LaunchAgents"
   if [ "$RUNTIME_MODE" = "binary" ]; then
-    program_args="<string>$BIN_PATH</string>"
+    program_args="<string>$(xml_escape "$BIN_PATH")</string>"
   else
-    program_args="<string>$PYTHON_BIN</string>
-    <string>$SRC_DIR/claude_usage_analyzer.py</string>"
+    program_args="<string>$(xml_escape "$PYTHON_BIN")</string>
+    <string>$(xml_escape "$SRC_DIR/claude_usage_analyzer.py")</string>"
   fi
   cat > "$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -190,9 +245,9 @@ install_launchagent() {
   <key>RunAtLoad</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>$LOG_DIR/sync.log</string>
+  <string>$(xml_escape "$LOG_DIR/sync.log")</string>
   <key>StandardErrorPath</key>
-  <string>$LOG_DIR/sync.err</string>
+  <string>$(xml_escape "$LOG_DIR/sync.err")</string>
 </dict>
 </plist>
 EOF
@@ -232,7 +287,7 @@ EOF
 }
 
 install_cron() {
-  cron_line="*/$SYNC_INTERVAL_MINUTES * * * * $(agent_command_line) --sync --days $SYNC_DAYS >> $LOG_DIR/sync.log 2>> $LOG_DIR/sync.err"
+  cron_line="*/$SYNC_INTERVAL_MINUTES * * * * $(agent_command_line) --sync --days $SYNC_DAYS >> $(shell_quote "$LOG_DIR/sync.log") 2>> $(shell_quote "$LOG_DIR/sync.err")"
   (crontab -l 2>/dev/null | grep -v "claude-usage-agent\\|claude_usage_analyzer.py --sync" || true; echo "$cron_line") | crontab -
   status "OK" "Scheduler installed: cron"
 }
@@ -265,8 +320,8 @@ install_scheduler() {
 }
 
 first_sync() {
-  run_agent --sync --days "$SYNC_DAYS" || true
-  run_agent --status
+  # All available history once; scheduled runs then resend only the last $SYNC_DAYS days.
+  run_agent --sync || warn "First sync failed; the scheduled sync will retry"
 }
 
 check_system
@@ -274,5 +329,7 @@ install_runtime
 preflight
 enroll_agent
 install_statusline
-install_scheduler
+# Before the scheduler: a LaunchAgent syncs as soon as it loads, and the all-history sync must go first.
 first_sync
+install_scheduler
+run_agent --status

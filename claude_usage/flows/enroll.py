@@ -1,8 +1,4 @@
-"""Enroll flow: obtain collector credentials and store them in config.json.
-
-enroll   -> backend issues a token after checking the shared enrollment secret
-register -> an admin-issued token is supplied directly
-"""
+"""Enroll flow: exchange the shared enrollment secret for this collector's own token, stored in config.json."""
 
 from __future__ import annotations
 
@@ -14,8 +10,9 @@ from claude_usage.constants import APP_VERSION, DEFAULT_SYNC_INTERVAL_MINUTES
 from claude_usage.identity import collect_identity, new_collector_id
 from claude_usage.paths import ClaudePaths, config_path, log_dir
 from claude_usage.store import load_config, save_config
-from claude_usage.transport import post_json
+from claude_usage.transport import HttpStatusError, post_json
 from claude_usage.ui import c
+from claude_usage.util import ensure_private_dir
 
 
 def _labels(existing: dict[str, Any], org_id: str | None, account_label: str | None, collector_label: str | None) -> dict[str, str]:
@@ -26,42 +23,18 @@ def _labels(existing: dict[str, Any], org_id: str | None, account_label: str | N
     }
 
 
-def _save(config: dict[str, Any], verb: str):
-    save_config(config)
-    log_dir().mkdir(parents=True, exist_ok=True)
-    print(c(f"Collector {verb}.", "green"))
-    print(f"Config : {config_path()}")
-    print(f"ID     : {config['collector_id']}")
-    print(f"Label  : {config['collector_label']}")
-
-
-def register(
-    claude: ClaudePaths,
-    *,
-    ingest_url: str,
-    collector_token: str,
-    org_id: str | None,
-    account_label: str | None,
-    collector_label: str | None,
-    sync_interval_minutes: int | None,
-):
-    existing = load_config()
-    now = datetime.now(timezone.utc).isoformat()
-    identity = collect_identity(existing)
-    _save({
-        **existing,
+def _request(enroll_url: str, secret: str, identity: dict[str, Any], org_id: str, token: str | None) -> dict[str, Any]:
+    headers = {"X-Enrollment-Secret": secret}
+    if token:
+        # Proves this machine owns the collector_id; the server refuses re-enrollment without it.
+        headers["Authorization"] = f"Bearer {token}"
+    result = post_json(enroll_url, {
         "schema_version": 1,
-        "collector_id": existing.get("collector_id") or new_collector_id(),
-        "machine_id": identity["machine_id"],
-        "user_id": identity["user_id"],
-        "ingest_url": ingest_url,
-        "collector_token": collector_token,
-        **_labels(existing, org_id, account_label, collector_label),
-        "claude_config_dir": str(claude.claude_dir),
-        "sync_interval_minutes": sync_interval_minutes or existing.get("sync_interval_minutes") or DEFAULT_SYNC_INTERVAL_MINUTES,
-        "registered_at": existing.get("registered_at") or now,
-        "updated_at": now,
-    }, "registered")
+        "collector_version": APP_VERSION,
+        "org_id": org_id,
+        "identity": identity,
+    }, headers=headers)
+    return result.get("response") or {}
 
 
 def enroll(
@@ -75,23 +48,25 @@ def enroll(
     sync_interval_minutes: int | None,
 ):
     """Raises RuntimeError with a user-facing message on any failure."""
+    if not enrollment_secret:
+        raise RuntimeError("Enrollment requires the ENROLLMENT_SECRET environment variable. Ask your admin for it.")
     existing = load_config()
     labels = _labels(existing, org_id, account_label, collector_label)
     collector_id = existing.get("collector_id") or new_collector_id()
     identity = collect_identity({**existing, "collector_id": collector_id, **labels})
-    if not enrollment_secret:
-        raise RuntimeError("Enrollment requires ENROLLMENT_SECRET (or --enrollment-secret). Ask your admin for it.")
-    result = post_json(enroll_url, {
-        "schema_version": 1,
-        "collector_version": APP_VERSION,
-        "org_id": labels["org_id"],
-        "identity": identity,
-    }, headers={"X-Enrollment-Secret": enrollment_secret})
-    response = result.get("response") or {}
+    try:
+        response = _request(enroll_url, enrollment_secret, identity, labels["org_id"], existing.get("collector_token"))
+    except HttpStatusError as exc:
+        if exc.status != 409:
+            raise
+        # This collector_id is already enrolled and our token is not accepted (lost or revoked): start a new collector.
+        collector_id = new_collector_id()
+        identity = collect_identity({**existing, "collector_id": collector_id, "machine_id": None, "user_id": None, **labels})
+        response = _request(enroll_url, enrollment_secret, identity, labels["org_id"], None)
     collector_token = response.get("collector_token")
     ingest_url = response.get("ingest_url")
     if not collector_token or not ingest_url:
-        raise RuntimeError(f"Enrollment response missing token or ingest URL: {response}")
+        raise RuntimeError("Enrollment response was missing the collector token or ingest URL.")
 
     now = datetime.now(timezone.utc).isoformat()
     config = {
@@ -112,5 +87,10 @@ def enroll(
         "updated_at": now,
         "enrolled_at": now,
     }
-    _save(config, "enrolled")
+    save_config(config)
+    ensure_private_dir(log_dir())
+    print(c("Collector enrolled.", "green"))
+    print(f"Config : {config_path()}")
+    print(f"ID     : {config['collector_id']}")
+    print(f"Label  : {config['collector_label']}")
     print(f"Sync   : every {config['sync_interval_minutes']} minutes")

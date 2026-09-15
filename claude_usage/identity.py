@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from claude_usage.util import safe_read_text, stable_hash
+from claude_usage.util import private_hash, safe_read_text, stable_hash
 
 
 def platform_machine_hint() -> str | None:
@@ -69,8 +69,9 @@ def collect_identity(config: dict[str, Any] | None = None) -> dict[str, Any]:
         "user_id": user_id,
         "os_username": os_username,
         "hostname": hostname,
-        "fqdn": fqdn,
-        "home_path_hash": stable_hash(str(Path.home())),
+        # macOS reports reverse DNS of the LAN address here, which reveals the network; it is not needed.
+        "fqdn": "",
+        "home_path_hash": private_hash(str(Path.home()), config.get("org_id") or ""),
         "platform": {
             "system": system,
             "release": platform.release(),

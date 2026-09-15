@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js" integrity="sha384-iLddHTLokph6Omwoyid4XKxHaWa6w41BnoEj0q5oOrzmYPpHIKt1wyjReA7s//pP" crossorigin="anonymous"></script>
   <style>
     :root {
       color-scheme: light;
@@ -295,6 +295,8 @@
       },
       tab: store.get("tab", "brief"),
       range: store.get("range", "30"),
+      // What the signed-in member may load; the database enforces the same limit.
+      access: { role: "", history: false, members: null },
       lens: "people",
       sessionFilter: "all",
       query: "",
@@ -357,7 +359,9 @@
     const firstName = (name) => String(name || "").split(" ")[0];
     // Lowercase a leading ordinary word only; keep names like "Haiku 4.5" or "Bash" intact.
     const lowerFirst = (text) => (/^(One|Two|Three|Four|Five|Six|Seven|Eight|Nine|Command-heavy|Reads|Mostly|Short|Spread|No)\b/.test(text) ? text.charAt(0).toLowerCase() + text.slice(1) : text);
-    const rangeInfo = () => RANGES.find((r) => r.id === state.range) || RANGES[1];
+    const allowedRanges = () => RANGES.filter((r) => state.access.history || (r.days !== null && r.days <= 30));
+    const rangeInfo = () => allowedRanges().find((r) => r.id === state.range) || RANGES[1];
+    const isAdmin = () => state.access.role === "admin" || state.access.role === "owner";
     const SURFACE_NAMES = { claude_code: "Code", desktop_chat: "Desktop", desktop_app: "Desktop", desktop_code: "Desktop Code", cowork: "Cowork", extensions: "Extensions", ide_extension: "IDE", browser_extension: "Chrome" };
     const ENTRYPOINT_NAMES = { cli: "Terminal", "claude-desktop": "Desktop", "claude-vscode": "VS Code", vscode: "VS Code", jetbrains: "JetBrains", "sdk-cli": "SDK", "sdk-ts": "SDK", "sdk-py": "SDK" };
     const sessionOrigin = (s) => s.desktop_surface === "cowork" || s.surface === "cowork" ? "Cowork" : [...new Set((s.entrypoints || []).map((e) => ENTRYPOINT_NAMES[e] || e))].join(", ");
@@ -371,22 +375,17 @@
     function connect() {
       const { supabaseUrl, supabaseKey } = state.config;
       client = supabaseUrl && supabaseKey
-        ? window.supabase.createClient(supabaseUrl, supabaseKey, { auth: { detectSessionInUrl: true, persistSession: true, autoRefreshToken: true } })
+        // PKCE: the sign-in link carries a one-time code bound to this browser, so a link crafted by someone else
+        // cannot sign this browser into their account.
+        ? window.supabase.createClient(supabaseUrl, supabaseKey, { auth: { flowType: "pkce", detectSessionInUrl: true, persistSession: true, autoRefreshToken: true } })
         : null;
-    }
-
-    async function restoreSessionFromUrl() {
-      if (!client || !window.location.hash.includes("access_token")) return;
-      const params = new URLSearchParams(window.location.hash.slice(1));
-      const access_token = params.get("access_token");
-      const refresh_token = params.get("refresh_token");
-      if (access_token && refresh_token) await client.auth.setSession({ access_token, refresh_token });
-      history.replaceState(null, document.title, window.location.pathname + window.location.search);
     }
 
     async function checkAuth() {
       if (!client) return null;
-      await restoreSessionFromUrl();
+      // Waits for supabase-js to exchange a ?code= sign-in link, then removes the code from the address bar.
+      await client.auth.getSession();
+      if (new URLSearchParams(window.location.search).has("code")) history.replaceState(null, document.title, window.location.pathname);
       const { data } = await client.auth.getUser();
       return data?.user || null;
     }
@@ -398,9 +397,11 @@
       state.signin.sending = true; state.signin.error = null; render();
       // Supabase matches redirect URLs exactly, and allowlist entries are usually written without a trailing slash.
       const redirect = window.location.origin + (window.location.pathname === "/" ? "" : window.location.pathname);
-      const { error } = await client.auth.signInWithOtp({ email, options: { emailRedirectTo: redirect } });
+      // Only invited members can sign in; the link is never used to create new accounts.
+      const { error } = await client.auth.signInWithOtp({ email, options: { emailRedirectTo: redirect, shouldCreateUser: false } });
       state.signin.sending = false;
-      if (error) state.signin.error = error.message; else state.signin.sent = true;
+      if (error) state.signin.error = /signups not allowed|not found/i.test(error.message) ? "This email is not invited. Ask an admin to add you." : error.message;
+      else state.signin.sent = true;
       render();
     }
 
@@ -427,13 +428,44 @@
       }
     }
 
+    async function loadAccess() {
+      const { data, error } = await client.rpc("my_dashboard_access", { target_org_id: state.config.orgId });
+      if (error) throw new Error(`access: ${error.message}`);
+      const row = (data || [])[0] || {};
+      state.access.role = row.role || "";
+      state.access.history = Boolean(row.can_view_history);
+      if (isAdmin()) await loadMembers();
+    }
+
+    async function loadMembers() {
+      const { data, error } = await client.rpc("org_access_list", { target_org_id: state.config.orgId });
+      state.access.members = error ? null : data || [];
+    }
+
+    async function setHistoryAccess(userId, allowed) {
+      const { error } = await client.rpc("set_history_access", { target_org_id: state.config.orgId, target_user_id: userId, allowed });
+      if (error) { state.error = `Could not change access: ${error.message}`; return render(); }
+      await loadMembers();
+      if (userId === state.user?.id) await refresh(); else render();
+    }
+
     async function refresh() {
-      if (window.DASHBOARD_FIXTURE) { state.raw = window.DASHBOARD_FIXTURE; state.loadedAt = new Date(); return render(); }
+      if (window.DASHBOARD_FIXTURE) {
+        state.access = { history: true, members: null, ...(window.DASHBOARD_FIXTURE.access || {}) };
+        state.raw = window.DASHBOARD_FIXTURE; state.loadedAt = new Date(); return render();
+      }
       if (!client || !state.user) return;
+      try {
+        await loadAccess();
+      } catch (error) {
+        state.error = error.message; return render();
+      }
       const range = rangeInfo();
+      state.range = range.id;
       const today = startOfDay(new Date());
-      // Twice the range, so the brief can compare against the previous period; at least 7 days for work lanes.
-      const since = range.days ? dayKey(addDays(today, -(range.days * 2 - 1))) : null;
+      // With history access, twice the range so the brief can compare with the previous period; at least 7 days for
+      // work lanes. Without it the database returns only the last 30 days, so there is nothing earlier to ask for.
+      const since = range.days ? dayKey(addDays(today, -((state.access.history ? range.days * 2 : range.days) - 1))) : null;
       const sessionSince = addDays(today, -Math.max(6, range.days ? range.days - 1 : 6));
       state.loading = true; state.error = null; render();
       try {
@@ -760,7 +792,7 @@
       const nav = TABS.map((t) => t.group
         ? `<div class="nav-group">${t.group}</div>`
         : `<button class="nav-item" data-action="tab" data-id="${t.id}" ${t.id === state.tab ? 'aria-current="page"' : ""}>${icon(ICONS[t.id])}<span>${t.label}</span>${t.id === "collectors" && issueCount ? `<span class="badge">${issueCount}</span>` : ""}</button>`).join("");
-      const ranges = RANGES.map((r) => `<button data-action="range" data-id="${r.id}" aria-pressed="${r.id === state.range}">${r.label}</button>`).join("");
+      const ranges = allowedRanges().map((r) => `<button data-action="range" data-id="${r.id}" aria-pressed="${r.id === rangeInfo().id}">${r.label}</button>`).join("");
       return `
         <div class="app">
           <aside class="sidebar">
@@ -851,7 +883,8 @@
       const top = ranked[0];
       const only = ranked.length === 1;
       const change = model.prevTotal ? (model.total - model.prevTotal) / model.prevTotal : null;
-      const deltaText = !range.days
+      const deltaText = range.days && !state.access.history ? ""
+        : !range.days
         ? (model.firstDay ? `since ${new Date(model.firstDay + "T00:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}` : "")
         : change === null ? `with no usage in the ${range.days} days before` : `${change >= 0 ? "up" : "down"} ${pct(Math.abs(change))} on the previous ${range.days} days`;
       const peopleWord = `${ranked.length} ${ranked.length === 1 ? "person" : "people"}`;
@@ -1260,6 +1293,24 @@
               <div class="stack" style="gap:3px;"><span style="font-size:13px;">${esc(issue.title)}</span><span class="muted" style="font-size:12px;">${esc(issue.detail)}</span></div>
               <span class="muted" style="font-size:12px;">${esc(issue.seen)}</span>
             </div>`).join("") || `<div class="muted" style="padding:12px 0 14px;border-top:1px solid var(--line-soft);font-size:13px;">Nothing needs attention.</div>`}
+        </section>
+        ${renderAccessPanel()}`;
+    }
+
+    // Admins only: who may see data older than 30 days.
+    function renderAccessPanel() {
+      if (!isAdmin() || !state.access.members) return "";
+      const COLS = "minmax(0,2fr) minmax(0,1fr) minmax(0,1.2fr)";
+      return `
+        <section class="panel table" style="margin-top:20px;">
+          <div class="panel-head"><h2>Dashboard access</h2><span class="muted" style="font-size:12px;">Everyone sees the last 30 days. History shows older data.</span></div>
+          <div class="trow head" style="grid-template-columns:${COLS}"><span>Member</span><span>Role</span><span>History</span></div>
+          ${state.access.members.map((m) => `
+            <div class="trow" style="grid-template-columns:${COLS}">
+              <span class="ellipsis" style="font-size:13px;">${esc(m.email || m.user_id)}</span>
+              <span style="font-size:13px;color:var(--ink-3);">${esc(m.role)}</span>
+              <span><button class="btn" style="height:28px;font-size:12px;" data-action="toggle-history" data-user="${esc(m.user_id)}" aria-pressed="${m.can_view_history ? "true" : "false"}">${m.can_view_history ? "Allowed · remove" : "Not allowed · allow"}</button></span>
+            </div>`).join("")}
         </section>`;
     }
 
@@ -1348,7 +1399,9 @@
       }
       if (!rows.length) return;
       const headers = Object.keys(rows[0]);
-      const csv = [headers.join(","), ...rows.map((row) => headers.map((h) => `"${String(row[h] ?? "").replaceAll('"', '""')}"`).join(","))].join("\n");
+      // A cell starting with = + - @ would run as a formula in a spreadsheet; project and branch names come from collectors.
+      const cell = (value) => { const text = String(value ?? ""); return `"${(/^[=+\-@\t\r]/.test(text) ? `'${text}` : text).replaceAll('"', '""')}"`; };
+      const csv = [headers.join(","), ...rows.map((row) => headers.map((h) => cell(row[h])).join(","))].join("\n");
       const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
       const a = document.createElement("a");
       a.href = url;
@@ -1378,6 +1431,7 @@
         render();
       },
       "signin-reset": () => { state.signin.sent = false; render(); },
+      "toggle-history": (el) => setHistoryAccess(el.dataset.user, el.getAttribute("aria-pressed") !== "true"),
     };
 
     document.addEventListener("click", (event) => {

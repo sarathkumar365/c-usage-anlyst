@@ -1,20 +1,25 @@
 # Installs the Claude usage agent for the current Windows user.
-# Phases: Test-System -> Install-Runtime -> Invoke-Preflight -> Register-Agent -> Install-Statusline -> Install-Scheduler -> Invoke-FirstSync
+# Phases: Test-System -> Install-Runtime -> Invoke-Preflight -> Register-Agent -> Install-Statusline -> Invoke-FirstSync -> Install-Scheduler
 param(
+  # Pinned to the release this installer belongs to; the binary is verified against that release's SHA256SUMS.
+  [string]$AgentVersion = $(if ($env:AGENT_VERSION) { $env:AGENT_VERSION } else { "v0.8.0" }),
   [string]$IngestUrl = $(if ($env:INGEST_URL) { $env:INGEST_URL } else { "https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/ingest" }),
-  [string]$CollectorToken = $env:COLLECTOR_TOKEN,
   [string]$EnrollUrl = $(if ($env:ENROLL_URL) { $env:ENROLL_URL } else { "https://yeokmzmmldqjngwtrfso.supabase.co/functions/v1/enroll" }),
   [string]$OrgId = $(if ($env:ORG_ID) { $env:ORG_ID } else { "team-main" }),
   [string]$AccountLabel = $(if ($env:ACCOUNT_LABEL) { $env:ACCOUNT_LABEL } else { $env:USERNAME }),
   [string]$CollectorLabel = $(if ($env:COLLECTOR_LABEL) { $env:COLLECTOR_LABEL } else { $env:COMPUTERNAME }),
   [string]$ClaudeDir = $(if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $HOME ".claude" }),
   [int]$SyncIntervalMinutes = $(if ($env:SYNC_INTERVAL_MINUTES) { [int]$env:SYNC_INTERVAL_MINUTES } else { 30 }),
-  [int]$SyncDays = $(if ($env:SYNC_DAYS) { [int]$env:SYNC_DAYS } else { 90 }),
-  [string]$ReleaseBaseUrl = $(if ($env:RELEASE_BASE_URL) { $env:RELEASE_BASE_URL } else { "https://github.com/sarathkumar365/c-usage-anlyst/releases/latest/download" }),
-  [string]$SourceArchiveUrl = $(if ($env:SOURCE_ARCHIVE_URL) { $env:SOURCE_ARCHIVE_URL } else { "https://codeload.github.com/sarathkumar365/c-usage-anlyst/zip/refs/heads/main" })
+  # Scheduled syncs resend this many days; the first sync after install sends all history.
+  [int]$SyncDays = $(if ($env:SYNC_DAYS) { [int]$env:SYNC_DAYS } else { 30 }),
+  [string]$ReleaseBaseUrl = $(if ($env:RELEASE_BASE_URL) { $env:RELEASE_BASE_URL } else { "" }),
+  [string]$SourceArchiveUrl = $(if ($env:SOURCE_ARCHIVE_URL) { $env:SOURCE_ARCHIVE_URL } else { "" })
 )
+if (-not $ReleaseBaseUrl) { $ReleaseBaseUrl = "https://github.com/sarathkumar365/c-usage-anlyst/releases/download/$AgentVersion" }
+if (-not $SourceArchiveUrl) { $SourceArchiveUrl = "https://codeload.github.com/sarathkumar365/c-usage-anlyst/zip/refs/tags/$AgentVersion" }
 
 $ErrorActionPreference = "Stop"
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $AppDir = Join-Path $env:LOCALAPPDATA "ClaudeUsageAgent"
 $BinPath = Join-Path $AppDir "claude-usage-agent.exe"
@@ -89,8 +94,12 @@ function Test-System {
     Stop-Install "Supabase enroll unreachable" "Check internet/VPN/firewall and rerun."
   }
 
-  if (-not $CollectorToken -and -not $env:ENROLLMENT_SECRET) {
-    Stop-Install "ENROLLMENT_SECRET is not set" "Run `$env:ENROLLMENT_SECRET = '<secret>' first, then rerun the install command."
+  if (-not $env:ENROLLMENT_SECRET) {
+    # Prompt instead of taking the secret on the command line, where it would land in PowerShell history.
+    $Secure = Read-Host -Prompt "Enrollment secret (input hidden)" -AsSecureString
+    $Plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($Secure))
+    if (-not $Plain) { Stop-Install "No enrollment secret provided" "Rerun the install command and enter the secret your admin gave you." }
+    $env:ENROLLMENT_SECRET = $Plain
   }
 }
 
@@ -129,15 +138,30 @@ function Install-PythonSource {
 }
 
 function Install-Runtime {
-  if (Test-Url $ReleaseAssetUrl) {
-    Invoke-WebRequest -Uri $ReleaseAssetUrl -OutFile $BinPath -UseBasicParsing
-    $script:RuntimeMode = "binary"
-    $script:ProbeUrl = $ReleaseAssetUrl
-    Write-Check "OK" "Downloaded native agent: $AssetName"
-  } else {
-    Write-Check "WARN" "Native release asset unavailable, trying Python fallback"
+  $Download = Join-Path $AppDir (".download-" + [System.Guid]::NewGuid().ToString())
+  try {
+    Invoke-WebRequest -Uri $ReleaseAssetUrl -OutFile $Download -UseBasicParsing -TimeoutSec 120
+    $Sums = (Invoke-WebRequest -Uri "$ReleaseBaseUrl/SHA256SUMS" -UseBasicParsing -TimeoutSec 30).Content
+    if ($Sums -is [byte[]]) { $Sums = [Text.Encoding]::UTF8.GetString($Sums) }
+  } catch {
+    if (Test-Path $Download) { Remove-Item -Force $Download }
+    if (-not $env:ALLOW_SOURCE_FALLBACK) {
+      Stop-Install "Could not download the $AgentVersion agent" "Check internet access and rerun, or set `$env:ALLOW_SOURCE_FALLBACK = '1' to run the $AgentVersion source with Python."
+    }
+    Write-Check "WARN" "Native release asset unavailable, using the $AgentVersion source with Python (ALLOW_SOURCE_FALLBACK)"
     Install-PythonSource
+    return
   }
+  $Expected = ($Sums -split "`n" | ForEach-Object { $Parts = $_.Trim() -split "\s+"; if ($Parts.Count -ge 2 -and $Parts[1].TrimStart("*") -eq $AssetName) { $Parts[0] } } | Select-Object -First 1)
+  $Actual = (Get-FileHash -Algorithm SHA256 -Path $Download).Hash.ToLowerInvariant()
+  if (-not $Expected -or $Expected.ToLowerInvariant() -ne $Actual) {
+    Remove-Item -Force $Download
+    Stop-Install "Checksum mismatch for $AssetName ($AgentVersion)" "Do not run this binary. Retry later or contact your admin."
+  }
+  Move-Item -Force $Download $BinPath
+  $script:RuntimeMode = "binary"
+  $script:ProbeUrl = $ReleaseAssetUrl
+  Write-Check "OK" "Downloaded and verified native agent: $AssetName $AgentVersion"
 }
 
 function Invoke-Preflight {
@@ -146,12 +170,8 @@ function Invoke-Preflight {
 }
 
 function Register-Agent {
-  $Common = @("--org-id", $OrgId, "--account-label", $AccountLabel, "--collector-label", $CollectorLabel, "--claude-dir", $ClaudeDir, "--sync-interval-minutes", "$SyncIntervalMinutes")
-  if ($CollectorToken) {
-    Invoke-Agent --register --ingest-url $IngestUrl --collector-token $CollectorToken @Common
-  } else {
-    Invoke-Agent --enroll --enroll-url $EnrollUrl @Common
-  }
+  # The secret reaches the agent through the environment only, never as an argument visible in the process list.
+  Invoke-Agent --enroll --enroll-url $EnrollUrl --org-id $OrgId --account-label $AccountLabel --collector-label $CollectorLabel --claude-dir $ClaudeDir --sync-interval-minutes "$SyncIntervalMinutes"
   if ($LASTEXITCODE -ne 0) { Stop-Install "Agent enrollment failed" "Fix the error above, then rerun." }
 }
 
@@ -186,8 +206,9 @@ function Install-Scheduler {
 }
 
 function Invoke-FirstSync {
-  Invoke-Agent --sync --days "$SyncDays"
-  Invoke-Agent --status
+  # All available history once; scheduled runs then resend only the last $SyncDays days.
+  Invoke-Agent --sync
+  if ($LASTEXITCODE -ne 0) { Write-Check "WARN" "First sync failed; the scheduled sync will retry" }
 }
 
 Test-System
@@ -195,5 +216,7 @@ Install-Runtime
 Invoke-Preflight
 Register-Agent
 Install-Statusline
-Install-Scheduler
+# Before the scheduler, so the all-history sync goes first.
 Invoke-FirstSync
+Install-Scheduler
+Invoke-Agent --status

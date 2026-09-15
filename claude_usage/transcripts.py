@@ -378,6 +378,25 @@ def parse_all(
     return requests, summarize_sessions(requests)
 
 
+def stats_cache_daily(stats: dict[str, Any] | None, before_day: str | None) -> list[tuple[str, str, int]]:
+    """(day, model, tokens) from Claude Code's stats cache for days older than the oldest transcript.
+
+    Claude Code deletes transcripts after about 30 days; the stats cache is the only record of older usage.
+    Days that transcripts still cover are skipped so they are never counted twice.
+    """
+    rows: list[tuple[str, str, int]] = []
+    for entry in (stats or {}).get("dailyModelTokens") or []:
+        if not isinstance(entry, dict) or not isinstance(entry.get("tokensByModel"), dict):
+            continue
+        day = str(entry.get("date") or "")
+        if not day or (before_day and day >= before_day):
+            continue
+        for model, tokens in entry["tokensByModel"].items():
+            if isinstance(tokens, int) and tokens > 0:
+                rows.append((day, str(model), tokens))
+    return rows
+
+
 def load_stats_cache(stats_cache: Path) -> dict[str, Any] | None:
     if not stats_cache.exists():
         return None

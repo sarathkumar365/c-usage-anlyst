@@ -41,8 +41,6 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Check whether this machine is ready for collector install/sync.")
     commands.add_argument("--enroll", action="store_true",
                           help="Enroll this machine with the team backend and save collector configuration.")
-    commands.add_argument("--register", action="store_true",
-                          help="Save collector configuration for background/team sync.")
     commands.add_argument("--sync", action="store_true",
                           help="Upload metrics-only usage payload to the configured ingest endpoint.")
     commands.add_argument("--install-statusline", action="store_true",
@@ -67,13 +65,10 @@ def build_parser() -> argparse.ArgumentParser:
     options.add_argument("--dry-run", action="store_true",
                          help="With --sync, print the upload payload instead of sending it.")
     options.add_argument("--ingest-url",
-                         help="HTTPS ingest endpoint, usually a Supabase Edge Function URL.")
-    options.add_argument("--collector-token",
-                         help="Collector registration/upload token. Stored locally by --register.")
+                         help="HTTPS ingest endpoint to test during --preflight.")
     options.add_argument("--enroll-url", default=DEFAULT_ENROLL_URL,
                          help=f"HTTPS enrollment endpoint. Default: {DEFAULT_ENROLL_URL}.")
-    options.add_argument("--enrollment-secret", default=os.environ.get("ENROLLMENT_SECRET", ""),
-                         help="Shared secret required by --enroll. Defaults to ENROLLMENT_SECRET; not stored.")
+    options.add_argument("--enrollment-secret", default="", help=argparse.SUPPRESS)
     options.add_argument("--release-asset-url", default="",
                          help="Optional release asset URL to test during --preflight.")
     options.add_argument("--org-id", help="Optional organization/team identifier for uploaded payloads.")
@@ -116,20 +111,14 @@ def dispatch(args: argparse.Namespace) -> int:
     claude = resolve_claude_paths(args.claude_dir, load_config())
     labels = {"org_id": args.org_id, "account_label": args.account_label, "collector_label": args.collector_label}
 
-    if args.register:
-        if not args.ingest_url or not args.collector_token:
-            return fail("--register requires --ingest-url and --collector-token.")
-        if not args.ingest_url.startswith("https://"):
-            return fail("--ingest-url must be an HTTPS URL.")
-        enroll_flow.register(claude, ingest_url=args.ingest_url, collector_token=args.collector_token,
-                             sync_interval_minutes=args.sync_interval_minutes, **labels)
-        return 0
-
     if args.enroll:
         if not args.enroll_url.startswith("https://"):
             return fail("--enroll-url must be an HTTPS URL.")
+        if args.enrollment_secret:
+            # Command-line arguments are visible to other users in the process list.
+            print(c("--enrollment-secret is ignored; set the ENROLLMENT_SECRET environment variable instead.", "yellow"))
         try:
-            enroll_flow.enroll(claude, enroll_url=args.enroll_url, enrollment_secret=args.enrollment_secret,
+            enroll_flow.enroll(claude, enroll_url=args.enroll_url, enrollment_secret=os.environ.get("ENROLLMENT_SECRET", ""),
                                sync_interval_minutes=args.sync_interval_minutes, **labels)
         except RuntimeError as exc:
             return fail(str(exc))
