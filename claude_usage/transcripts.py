@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from claude_usage.constants import SESSION_IDLE_GAP_SECONDS
 from claude_usage.models import RequestUsage, SessionSummary
 from claude_usage.util import parse_ts, stable_hash
 
@@ -337,8 +338,28 @@ def summarize_sessions(requests: list[RequestUsage]) -> dict[str, SessionSummary
             git_branch=next((r.git_branch for r in reversed(reqs) if r.git_branch), None),
             entrypoints=tuple(sorted({r.entrypoint for r in reqs if r.entrypoint})),
             claude_code_version=max((r.claude_code_version for r in reqs if r.claude_code_version), key=version_key, default=None),
+            active_spans=active_spans(reqs),
         )
     return sessions
+
+
+def active_spans(requests: list[RequestUsage]) -> tuple[tuple[str, str], ...]:
+    """Split time-ordered requests into stretches of work separated by idle gaps."""
+    spans: list[tuple[str, str]] = []
+    start = end = None
+    for request in requests:
+        ts = parse_ts(request.timestamp)
+        if not ts:
+            continue
+        if end is not None and (ts - end).total_seconds() > SESSION_IDLE_GAP_SECONDS:
+            spans.append((start.isoformat(), end.isoformat()))
+            start = None
+        if start is None:
+            start = ts
+        end = ts
+    if start is not None:
+        spans.append((start.isoformat(), end.isoformat()))
+    return tuple(spans)
 
 
 def version_key(version: str) -> tuple:

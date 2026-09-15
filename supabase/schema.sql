@@ -203,6 +203,7 @@ alter table usage_sessions add column if not exists claude_code_version text;
 alter table usage_sessions add column if not exists desktop_surface text;
 alter table usage_sessions add column if not exists desktop_effort text;
 alter table usage_sessions add column if not exists completed_turns integer;
+alter table usage_sessions add column if not exists active_spans jsonb not null default '[]'::jsonb;
 
 create table if not exists identity_aliases (
   org_id text not null references organizations(id) on delete cascade,
@@ -653,7 +654,8 @@ select
   s.claude_code_version,
   s.desktop_surface,
   s.desktop_effort,
-  s.completed_turns
+  s.completed_turns,
+  s.active_spans
 from usage_sessions s;
 
 create or replace view dashboard_sources

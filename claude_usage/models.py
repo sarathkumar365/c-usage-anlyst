@@ -82,14 +82,26 @@ class SessionSummary:
     git_branch: str | None = None
     entrypoints: tuple[str, ...] = ()
     claude_code_version: str | None = None
+    # (start, end) ISO timestamps of each stretch of work; gaps longer than SESSION_IDLE_GAP_SECONDS split them.
+    active_spans: tuple[tuple[str, str], ...] = ()
 
     @property
-    def duration_seconds(self) -> float:
+    def span_seconds(self) -> float:
         a = parse_ts(self.first_ts)
         b = parse_ts(self.last_ts)
         if not a or not b:
             return 0.0
         return max(0.0, (b - a).total_seconds())
+
+    @property
+    def duration_seconds(self) -> float:
+        """Active time: the sum of active spans, not first-to-last wall clock."""
+        total = 0.0
+        for start, end in self.active_spans:
+            a, b = parse_ts(start), parse_ts(end)
+            if a and b:
+                total += max(0.0, (b - a).total_seconds())
+        return total if self.active_spans else self.span_seconds
 
     @property
     def tokens_per_hour(self) -> float:

@@ -603,8 +603,8 @@
         .sort((a, b) => new Date(a.bucket_at) - new Date(b.bucket_at));
 
       const BUFFER_MS = 10 * 60 * 1000;
-      const spans = people.flatMap((p) => p.allSessions)
-        .map((s) => [new Date(s.first_ts || s.last_ts).getTime() - BUFFER_MS, new Date(s.last_ts).getTime() + BUFFER_MS]);
+      const spans = people.flatMap((p) => p.allSessions).flatMap(sessionSpans)
+        .map(([a, b]) => [a.getTime() - BUFFER_MS, b.getTime() + BUFFER_MS]);
       const tracked = (from, to, row) => (row.sources || []).includes("statusline") || spans.some(([a, b]) => a <= to && b >= from);
       let rise = 0;
       let unattributed = 0;
@@ -631,9 +631,9 @@
       const sessionTokens = sessions.reduce((acc, s) => acc + num(s.reported_total), 0);
       const biggest = sessions.slice().sort((a, b) => num(b.reported_total) - num(a.reported_total))[0];
       if (biggest && p.tokens && num(biggest.reported_total) / p.tokens >= 0.25) {
-        reasons.push({ kind: "single", project: biggest.project_name, text: `One ${duration(biggest.duration_seconds)} session is ${pct(Math.min(1, num(biggest.reported_total) / p.tokens))} of the total` });
+        reasons.push({ kind: "single", project: biggest.project_name, text: `One ${sessionDuration(biggest)} session is ${pct(Math.min(1, num(biggest.reported_total) / p.tokens))} of the total` });
       }
-      const long = sessions.filter((s) => num(s.duration_seconds) >= 7200);
+      const long = sessions.filter((s) => activeSeconds(s) >= 7200);
       if (long.length >= 2) reasons.push({ kind: "long", count: long.length, text: `${countWord(long.length)} sessions ran longer than 2 hours` });
       const subTokens = sessions.filter((s) => s.is_subagent).reduce((acc, s) => acc + num(s.reported_total), 0);
       const subRuns = sessions.filter((s) => s.is_subagent).length;
@@ -651,8 +651,9 @@
         const phrase = { Bash: `Command-heavy: ${share} of tool calls run commands`, Read: `Reads many files: ${share} of tool calls are Read`, Edit: `Mostly editing: ${share} of tool calls are Edit` }[topTool.tool];
         reasons.push({ kind: "tool", text: phrase || `${share} of tool calls are ${topTool.tool}` });
       }
-      const avg = sessions.length ? sessions.reduce((acc, s) => acc + num(s.duration_seconds), 0) / sessions.length : 0;
-      if (sessions.length >= 3 && avg < 1200 && !reasons.length) reasons.push({ kind: "short", text: "Short sessions, no single large run" });
+      const timed = sessions.filter((s) => activeSeconds(s) !== null);
+      const avg = timed.length ? timed.reduce((acc, s) => acc + activeSeconds(s), 0) / timed.length : 0;
+      if (timed.length >= 3 && avg < 1200 && !reasons.length) reasons.push({ kind: "short", text: "Short sessions, no single large run" });
       if (!reasons.length) reasons.push({ kind: "spread", text: sessions.length ? `Spread across ${sessions.length} session${sessions.length === 1 ? "" : "s"}` : "No session detail for this range" });
       return reasons;
     }
@@ -798,6 +799,15 @@
     }
 
     const personAction = (p) => `data-action="open-person" data-key="${esc(p.key)}"`;
+    // Collectors from 0.7.2 send active spans and active duration. Older rows carry first-to-last wall clock, which
+    // for a session resumed days later is not time worked, so anything over 12 hours is treated as unknown.
+    const LEGACY_DURATION_LIMIT_SECONDS = 12 * 3600;
+    const hasSpans = (s) => Array.isArray(s.active_spans) && s.active_spans.length > 0;
+    const activeSeconds = (s) => (hasSpans(s) || num(s.duration_seconds) <= LEGACY_DURATION_LIMIT_SECONDS ? num(s.duration_seconds) : null);
+    const sessionDuration = (s) => (activeSeconds(s) === null ? "resumed" : duration(activeSeconds(s)));
+    const sessionSpans = (s) => hasSpans(s)
+      ? s.active_spans.map(([a, b]) => [new Date(a), new Date(b)])
+      : [[new Date(s.first_ts || s.last_ts), new Date(new Date(s.first_ts || s.last_ts).getTime() + (activeSeconds(s) || 0) * 1000)]];
     const statusBadge = (p) => `<span class="status"><span class="dot" style="background:${p.status.color}"></span>${p.status.label}</span>`;
 
     // ---------------------------------------------------------------------------
@@ -1027,7 +1037,7 @@
         return ((dayIndex + (hour - OPEN) / HOURS) / 7) * 100;
       };
       const lanesPeople = model.people
-        .map((p) => ({ p, sessions: p.allSessions.filter((s) => new Date(s.first_ts || s.last_ts) >= start && num(s.reported_total) > 0) }))
+        .map((p) => ({ p, sessions: p.allSessions.filter((s) => num(s.reported_total) > 0 && sessionSpans(s).some(([, end]) => end >= start)) }))
         .filter((x) => x.sessions.length)
         .map((x) => ({ ...x, tokens: x.sessions.reduce((acc, s) => acc + num(s.reported_total), 0) }))
         .sort((a, b) => b.tokens - a.tokens);
@@ -1053,17 +1063,21 @@
       const bands = days.map((d, i) => `<div style="position:absolute;left:${(i / 7) * 100}%;width:${100 / 7}%;top:0;bottom:0;border-left:1px solid #22211f;${d.getDay() === 0 || d.getDay() === 6 ? "background:#181817;" : ""}"></div>`).join("");
 
       const lanes = lanesPeople.map(({ p, sessions, tokens }, i) => {
+        // One bar per active span, so a session resumed on another day shows where the work happened.
         const bars = sessions.map((s) => {
-          const first = new Date(s.first_ts || s.last_ts);
-          const left = pos(first);
-          const width = Math.max(0.35, Math.min(100 - left, (num(s.duration_seconds) / 3600 / HOURS / 7) * 100));
           const t = num(s.reported_total);
           const height = Math.round(4 + 30 * Math.sqrt(t / maxTokens));
           const top = s.is_subagent ? 60 : 96 / 2 - height / 2 + 4;
-          const label = `${s.project_name || s.project} · ${duration(s.duration_seconds)} · ${compact(t)} tokens${s.is_subagent ? " · subagent" : ""}`;
-          const bar = `<div class="session-bar ${s.is_subagent ? "sub" : t >= heavy ? "heavy" : ""}" title="${esc(label)}" style="left:${left.toFixed(2)}%;width:${width.toFixed(2)}%;top:${top.toFixed(1)}px;${s.is_subagent ? "" : `height:${height}px;`}"></div>`;
-          if (!callouts.has(s.session_id) || s.is_subagent) return bar;
-          return bar + `<div class="callout-line" style="left:${left.toFixed(2)}%;height:${Math.max(4, top - 8).toFixed(1)}px;"></div><span class="callout" style="left:${left.toFixed(2)}%;${left < 50 ? "transform:translateX(6px);" : ""}">${esc(`${duration(s.duration_seconds)} · ${compact(t)} · ${s.project_name || s.project}`)}</span>`;
+          const label = `${s.project_name || s.project} · ${sessionDuration(s)} · ${compact(t)} tokens${s.is_subagent ? " · subagent" : ""}`;
+          const spans = sessionSpans(s).filter(([, end]) => end >= start);
+          const longest = spans.reduce((best, span) => (span[1] - span[0] > best[1] - best[0] ? span : best), spans[0]);
+          return spans.map((span) => {
+            const left = pos(span[0]);
+            const width = Math.max(0.35, Math.min(100 - left, ((span[1] - span[0]) / 3600000 / HOURS / 7) * 100));
+            const bar = `<div class="session-bar ${s.is_subagent ? "sub" : t >= heavy ? "heavy" : ""}" title="${esc(label)}" style="left:${left.toFixed(2)}%;width:${width.toFixed(2)}%;top:${top.toFixed(1)}px;${s.is_subagent ? "" : `height:${height}px;`}"></div>`;
+            if (span !== longest || !callouts.has(s.session_id) || s.is_subagent) return bar;
+            return bar + `<div class="callout-line" style="left:${left.toFixed(2)}%;height:${Math.max(4, top - 8).toFixed(1)}px;"></div><span class="callout" style="left:${left.toFixed(2)}%;${left < 50 ? "transform:translateX(6px);" : ""}">${esc(`${sessionDuration(s)} · ${compact(t)} · ${s.project_name || s.project}`)}</span>`;
+          }).join("");
         }).join("");
         const syncedAt = p.lastSync ? new Date(p.lastSync) : null;
         const staleBand = p.stale && syncedAt && syncedAt >= start
@@ -1201,7 +1215,7 @@
               <span class="mono ellipsis" style="font-size:12px;color:var(--ink-3);" title="${esc(s.git_branch || "")}">${esc(s.git_branch || "—")}</span>
               <span class="ellipsis" style="font-size:13px;color:var(--ink-3);">${esc(sessionOrigin(s) || "—")}</span>
               <span class="mono num" style="font-size:13px;">${compact(s.reported_total)}</span>
-              <span class="mono num" style="font-size:13px;color:var(--ink-3);">${duration(s.duration_seconds)}</span>
+              <span class="mono num" style="font-size:13px;color:var(--ink-3);">${esc(sessionDuration(s))}</span>
               <span class="num" style="font-size:13px;color:var(--ink-3);">${esc(timeAgo(s.last_ts))}</span>
             </div>`).join("") || `<div class="empty">No sessions in this range.</div>`}
           ${rows.length > 200 ? `<div class="empty" style="padding:16px;">Showing the 200 largest sessions.</div>` : ""}
@@ -1328,7 +1342,7 @@
         rows = model.projects.map((p) => ({ project: p.name, tokens: p.tokens, share: (p.tokens / (model.total || 1)).toFixed(4), people: p.people.size, cache_share: (p.tokens ? p.cache / p.tokens : 0).toFixed(4), requests: p.requests }));
       } else if (state.tab === "sessions") {
         name = "sessions";
-        rows = sessionRows().map(({ s, p }) => ({ session_id: s.session_id, person: p.name, machine: p.machine, project: s.project_name || s.project, branch: s.git_branch || "", from: sessionOrigin(s), subagent: s.is_subagent, tokens: s.reported_total, duration_seconds: s.duration_seconds, first_ts: s.first_ts, last_ts: s.last_ts }));
+        rows = sessionRows().map(({ s, p }) => ({ session_id: s.session_id, person: p.name, machine: p.machine, project: s.project_name || s.project, branch: s.git_branch || "", from: sessionOrigin(s), subagent: s.is_subagent, tokens: s.reported_total, active_seconds: activeSeconds(s) ?? "", first_ts: s.first_ts, last_ts: s.last_ts }));
       } else {
         rows = model.people.filter((p) => p.meta || p.tokens).map((p) => ({ person: p.name, machine: p.machine, account: p.account, tokens: p.tokens, share: p.share.toFixed(4), requests: p.requests, top_project: p.topProject, top_model: p.topModel, reasons: p.reasons.map((r) => r.text).join("; "), last_sync: p.lastSync || "", status: p.status.label }));
       }

@@ -122,6 +122,22 @@ class TranscriptContextTests(FixtureCase):
         self.assertEqual(session.entrypoints, ("cli",))
         self.assertEqual(session.claude_code_version, "2.1.210")
 
+    def test_resumed_session_counts_active_time_not_the_gap(self):
+        session = collect_usage(self.claude, UsageQuery()).sessions[fixture_home.SESSION_ID]
+        self.assertGreater(session.span_seconds, 24 * 3600)
+        self.assertEqual(len(session.active_spans), 2)
+        self.assertEqual(session.duration_seconds, 0)
+        payload = PayloadTests.build(self, UsageQuery(), datetime.now(timezone.utc))
+        row = next(s for s in payload["sessions"] if s["session_id"] == fixture_home.SESSION_ID)
+        self.assertEqual([span[0][:10] for span in row["active_spans"]], ["2026-08-20", "2026-08-21"])
+
+    def test_active_spans_join_close_requests(self):
+        from claude_usage.models import RequestUsage
+        from claude_usage.transcripts import active_spans
+        make = lambda ts: RequestUsage("r", ts, "m", "f", "p", "s", False, None, True, 1)
+        spans = active_spans([make("2026-08-20T10:00:00+00:00"), make("2026-08-20T10:20:00+00:00"), make("2026-08-20T11:00:00+00:00")])
+        self.assertEqual(spans, (("2026-08-20T10:00:00+00:00", "2026-08-20T10:20:00+00:00"), ("2026-08-20T11:00:00+00:00", "2026-08-20T11:00:00+00:00")))
+
     def test_resumed_and_sidechain_copies_are_counted_once(self):
         usage = collect_usage(self.claude, UsageQuery())
         req_b = [r for r in usage.requests if r.request_id == "req_b"]

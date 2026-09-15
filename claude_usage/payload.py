@@ -94,6 +94,7 @@ def build_sync_payload(
             "desktop_surface": desktop.surface if desktop else None,
             "desktop_effort": desktop.effort if desktop else None,
             "completed_turns": desktop.completed_turns if desktop else None,
+            "active_spans": [list(span) for span in s.active_spans],
         })
 
     tool_counter = Counter()

@@ -24,7 +24,7 @@ Status values: `open`, `in-progress`, `fixed`, `deferred`, `wontfix`, `unverifie
 | KI-14 | Low | Repo hygiene | Committed plist contains a developer-local path | fixed |
 | KI-16 | Medium | Data integrity | Subagent transcripts merged into parent sessions | fixed |
 | KI-15 | High | Data integrity | Cross-file request duplication double-counts | fixed |
-| KI-17 | Medium | Dashboard | Resumed sessions report durations spanning days | open |
+| KI-17 | Medium | Dashboard | Resumed sessions report durations spanning days | fixed |
 | KI-18 | Low | Repo hygiene | Maintainer's LaunchAgent runs the working tree | open |
 
 ---
@@ -159,6 +159,10 @@ Status values: `open`, `in-progress`, `fixed`, `deferred`, `wontfix`, `unverifie
 - **Problem:** A session's duration is its last request minus its first. A session resumed days later spans the gap, so the live dashboard showed "one 366h 05m session is 47% of the total" for cdhameja.
 - **Impact:** "Long session" reasons and work-lane bars overstate how long people actually worked.
 - **Fix direction:** Split a session into active spans at gaps longer than about 30 minutes, and report active time instead of wall-clock span.
+- **Fixed (v0.7.2):**
+  - The collector splits each session into active spans at gaps longer than 30 minutes (`transcripts.active_spans`), and `duration_seconds` and `tokens_per_hour` now use active time. On the maintainer's Mac, 12 sessions spanned more than 24 hours of wall-clock time; the most active of them had 3.2 hours of work.
+  - The spans are stored in `usage_sessions.active_spans`. The work lanes draw one bar per span.
+  - Rows from older collectors have no spans. When their duration is over 12 hours, the dashboard shows "resumed" instead of a length and leaves them out of the long-session reasons.
 
 ## KI-18 — Maintainer's LaunchAgent runs the working tree
 

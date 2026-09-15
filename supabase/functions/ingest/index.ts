@@ -69,7 +69,7 @@ const TABLES: TableSpec[] = [
     columns: ["session_id", "surface", "confidence", "project", "project_name", "is_subagent", "agent_id", "first_ts",
       "last_ts", "duration_seconds", "tokens_per_hour", "requests", "finalized_requests", "incomplete_requests", "models",
       ...TOKEN_COLUMNS, "git_branch", "entrypoints", "claude_code_version", "desktop_surface", "desktop_effort",
-      "completed_turns"],
+      "completed_turns", "active_spans"],
     key: ["session_id"],
     accountLabel: true,
     stamp: "updated_at",
